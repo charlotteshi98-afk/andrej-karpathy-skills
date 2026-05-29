@@ -1,0 +1,13 @@
+{
+  "manifest_version": 3,
+  "name": "VO Script Summary Tool",
+  "version": "1.0.0",
+  "description": "Game localization VO script analyzer for production teams",
+  "permissions": ["storage"],
+  "host_permissions": ["https://api.anthropic.com/*"],
+  "action": {
+    "default_popup": "popup.html",
+    "default_icon": { "48": "icon.png" }
+  },
+  "icons": { "48": "icon.png" }
+}
