@@ -582,12 +582,6 @@ Output ONLY the data lines, no headers, no extra text.`;
       const voCount = scene.lines.filter(l => l.hasVO).length;
       const idx = structuredRows.findIndex(r => r.performId === scene.performId);
 
-      if (voCount === 0) {
-        if (idx !== -1) structuredRows[idx].storySummary = '无配音场景';
-        tableDiv.innerHTML = renderStructuredTable(structuredRows);
-        continue;
-      }
-
       const sceneDigest = `[PID:${scene.performId}] [${scene.type}] ${scene.description}\n` +
         scene.lines.map(l => (l.hasVO ? '[VO]  ' : '      ') + l.speaker + ': ' + l.text).join('\n');
 
@@ -595,7 +589,8 @@ Output ONLY the data lines, no headers, no extra text.`;
 
       try {
         const summary = await callClaude(sysP2, sceneDigest);
-        if (idx !== -1) structuredRows[idx].storySummary = summary.trim();
+        const label = voCount === 0 ? '【无配音场景】' : '';
+        if (idx !== -1) structuredRows[idx].storySummary = label + summary.trim();
       } catch (_e) {
         if (idx !== -1) structuredRows[idx].storySummary = '(error)';
       }
