@@ -259,11 +259,13 @@ function parseCNScript(arrayBuffer) {
   const cText    = col('Textmap', 2);
   const cComment = col('Comment', 4);
   const cPID     = col('PerformID', 7);
-  const cVOID    = col('VOID', 23);
+  const cVOID    = col('VOID', col('音频序号（通用）', col('音频序号', 23)));
 
   const get = (row, idx) =>
     String(idx != null && row[idx] != null ? row[idx] : '').trim();
   const isPID = pid => /^\d+$/.test(pid);
+  // A VO ID cell is valid only if non-empty and not a Chinese label (header bleed)
+  const isValidVOID = val => val !== '' && !/^[一-鿿]/.test(val);
 
   const scenes = [];
 
@@ -282,7 +284,7 @@ function parseCNScript(arrayBuffer) {
         currentScene.lines.push({
           speaker: name || '[narration]',
           text,
-          hasVO:   get(row, cVOID) !== '',
+          hasVO:   isValidVOID(get(row, cVOID)),
           comment: get(row, cComment),
         });
       }
@@ -315,7 +317,7 @@ function parseCNScript(arrayBuffer) {
         scene.lines.push({
           speaker: name || '[narration]',
           text,
-          hasVO:   get(row, cVOID) !== '',
+          hasVO:   isValidVOID(get(row, cVOID)),
           comment: get(row, cComment),
         });
       } else if (name || text) {
@@ -340,21 +342,42 @@ function parseENTracker(arrayBuffer) {
     }
   }
 
+  const colMap = {};
+  if (headerIdx !== -1) {
+    rows[headerIdx].forEach((cell, j) => {
+      const label = String(cell).trim();
+      if (label && !(label in colMap)) colMap[label] = j;
+    });
+  }
+  const col = (label, fallback) => (label in colMap ? colMap[label] : fallback);
+  const isValidVOID = val => val !== '' && !/^[一-鿿]/.test(val);
+
+  const cVoId  = col('VO ID', 1);
+  const cCharCHS = col('角色（中文）', col('CharCHS', 2));
+  const cChar  = col('Character', 3);
+  const cNotes = col('Performance Notes', col('性能备注', 8));
+  const cCN    = col('Chinese Script', col('中文台词', 9));
+  const cEN    = col('English Script', col('英文台词', 10));
+  const cLatestEN = col('Latest EN', col('最新英文', 19));
+  const cVOID  = col('VOID', col('音频序号（通用）', col('音频序号', 23)));
+  const cPID   = col('PerformID', 25);
+
   const lines = [];
   const start = headerIdx === -1 ? 1 : headerIdx + 1;
+  const get = (row, idx) => String(idx != null && row[idx] != null ? row[idx] : '').trim();
   for (let i = start; i < rows.length; i++) {
     const row  = rows[i];
-    const voId = String(row[1] || '').trim();
-    if (!voId) continue;
+    const voId = get(row, cVoId);
+    if (!voId || !isValidVOID(voId)) continue;
     lines.push({
       voId,
-      charCHS:          String(row[2]  || '').trim(),
-      character:        String(row[3]  || '').trim(),
-      chineseScript:    String(row[9]  || '').trim(),
-      englishScript:    String(row[10] || '').trim(),
-      latestEN:         String(row[19] || '').trim(),
-      performanceNotes: String(row[8]  || '').trim(),
-      performId:        String(row[25] || '').trim(),
+      charCHS:          get(row, cCharCHS),
+      character:        get(row, cChar),
+      chineseScript:    get(row, cCN),
+      englishScript:    get(row, cEN),
+      latestEN:         get(row, cLatestEN),
+      performanceNotes: get(row, cNotes),
+      performId:        get(row, cPID),
     });
   }
   return lines;
@@ -548,27 +571,32 @@ Output ONLY the data lines, no headers, no extra text.`;
       lineCount:    s.lines.length,
       voCount:      s.lines.filter(l => l.hasVO).length,
       shortDesc:    descMap[s.performId] || s.description,
-      storySummary: /^gal/i.test(s.type) ? null : '—',
+      storySummary: null,
     }));
 
-    // Render after pass 1 (GAL still shimmer)
+    // Render after pass 1 (all scenes still shimmer)
     tableDiv.innerHTML = renderStructuredTable(structuredRows);
 
-    // Pass 2: per-GAL scene story summary
-    const galScenes = cnScenes.filter(s => /^gal/i.test(s.type));
+    // Pass 2: story summary for all scenes
+    for (const scene of cnScenes) {
+      const voCount = scene.lines.filter(l => l.hasVO).length;
+      const idx = structuredRows.findIndex(r => r.performId === scene.performId);
 
-    for (const scene of galScenes) {
+      if (voCount === 0) {
+        if (idx !== -1) structuredRows[idx].storySummary = '无配音场景';
+        tableDiv.innerHTML = renderStructuredTable(structuredRows);
+        continue;
+      }
+
       const sceneDigest = `[PID:${scene.performId}] [${scene.type}] ${scene.description}\n` +
         scene.lines.map(l => (l.hasVO ? '[VO]  ' : '      ') + l.speaker + ': ' + l.text).join('\n');
 
-      const sysP2 = `Summarize this GAL/galge scene in ≤30 Chinese characters for a localization team. Focus on key emotional beats and story developments. Return ONLY the summary, no extra text.`;
+      const sysP2 = `Summarize this scene in ≤30 Chinese characters for a localization team. Focus on key emotional beats and story developments. Return ONLY the summary, no extra text.`;
 
       try {
         const summary = await callClaude(sysP2, sceneDigest);
-        const idx = structuredRows.findIndex(r => r.performId === scene.performId);
         if (idx !== -1) structuredRows[idx].storySummary = summary.trim();
       } catch (_e) {
-        const idx = structuredRows.findIndex(r => r.performId === scene.performId);
         if (idx !== -1) structuredRows[idx].storySummary = '(error)';
       }
 
