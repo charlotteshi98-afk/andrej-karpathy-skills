@@ -1,15 +1,15 @@
 /* ─── Variables ─────────────────────────────────────────────────────────── */
 :root {
-  --bg:          #0e0f14;
-  --surface:     #16181f;
-  --surface2:    #1e2029;
-  --border:      #2a2d3a;
-  --accent:      #c9a96e;
-  --accent2:     #7eb8b4;
-  --accent3:     #e07b6a;
-  --text:        #e8e4da;
-  --text-dim:    #8a8896;
-  --text-dimmer: #4a4858;
+  --bg:          #f0f4f8;
+  --surface:     #ffffff;
+  --surface2:    #e8eef5;
+  --border:      #c8d6e5;
+  --accent:      #2563eb;
+  --accent2:     #0891b2;
+  --accent3:     #dc2626;
+  --text:        #1e293b;
+  --text-dim:    #64748b;
+  --text-dimmer: #94a3b8;
   --radius:      6px;
 }
 
@@ -61,7 +61,7 @@ html, body {
 
 .vo-badge {
   background: var(--accent);
-  color: var(--bg);
+  color: #ffffff;
   font-family: 'Space Mono', monospace;
   font-weight: 700;
   font-size: 11px;
@@ -135,7 +135,7 @@ button { cursor: pointer; font-family: 'Noto Sans SC', sans-serif; }
 
 .btn-gold {
   background: var(--accent);
-  color: var(--bg);
+  color: #ffffff;
   border: none;
   border-radius: var(--radius);
   font-weight: 700;
@@ -149,7 +149,7 @@ button { cursor: pointer; font-family: 'Noto Sans SC', sans-serif; }
 
 .btn-teal {
   background: var(--accent2);
-  color: var(--bg);
+  color: #ffffff;
   border: none;
   border-radius: var(--radius);
   font-weight: 700;
@@ -194,7 +194,7 @@ button { cursor: pointer; font-family: 'Noto Sans SC', sans-serif; }
 }
 .upload-zone:hover, .upload-zone.drag-over {
   border-color: var(--accent);
-  background: #1a1b22;
+  background: #dbeafe;
 }
 .upload-zone.has-file {
   border-style: solid;
@@ -325,7 +325,7 @@ button { cursor: pointer; font-family: 'Noto Sans SC', sans-serif; }
 }
 .lang-btn.active {
   background: var(--accent);
-  color: var(--bg);
+  color: #ffffff;
   font-weight: 700;
 }
 
@@ -349,7 +349,7 @@ button { cursor: pointer; font-family: 'Noto Sans SC', sans-serif; }
 .pill.active {
   border-color: var(--accent);
   color: var(--accent);
-  background: rgba(201,169,110,0.08);
+  background: rgba(37,99,235,0.08);
 }
 
 /* ─── Action Row ─────────────────────────────────────────────────────────── */
@@ -362,7 +362,7 @@ button { cursor: pointer; font-family: 'Noto Sans SC', sans-serif; }
 
 /* ─── Error ──────────────────────────────────────────────────────────────── */
 .error-msg {
-  background: rgba(224,123,106,0.1);
+  background: rgba(220,38,38,0.07);
   border: 1px solid var(--accent3);
   border-radius: var(--radius);
   color: var(--accent3);
@@ -480,7 +480,7 @@ button { cursor: pointer; font-family: 'Noto Sans SC', sans-serif; }
   white-space: nowrap;
 }
 
-.data-table tr:hover td { background: rgba(255,255,255,0.02); }
+.data-table tr:hover td { background: rgba(37,99,235,0.04); }
 
 /* ─── Type Badges ────────────────────────────────────────────────────────── */
 .type-badge {
@@ -492,10 +492,10 @@ button { cursor: pointer; font-family: 'Noto Sans SC', sans-serif; }
   white-space: nowrap;
   font-weight: 700;
 }
-.type-gal    { background: rgba(167,139,250,0.18); color: #a78bfa; border: 1px solid rgba(167,139,250,0.3); }
-.type-bubble { background: rgba(96,165,250,0.18);  color: #60a5fa; border: 1px solid rgba(96,165,250,0.3); }
-.type-main   { background: rgba(52,211,153,0.18);  color: #34d399; border: 1px solid rgba(52,211,153,0.3); }
-.type-other  { background: rgba(139,132,150,0.18); color: #8b8496; border: 1px solid rgba(139,132,150,0.3); }
+.type-gal    { background: rgba(124,58,237,0.1);  color: #6d28d9; border: 1px solid rgba(124,58,237,0.25); }
+.type-bubble { background: rgba(37,99,235,0.1);   color: #1d4ed8; border: 1px solid rgba(37,99,235,0.25); }
+.type-main   { background: rgba(5,150,105,0.1);   color: #047857; border: 1px solid rgba(5,150,105,0.25); }
+.type-other  { background: rgba(100,116,139,0.1); color: #475569; border: 1px solid rgba(100,116,139,0.25); }
 
 /* ─── Shimmer ────────────────────────────────────────────────────────────── */
 @keyframes shimmer {
@@ -537,8 +537,8 @@ button { cursor: pointer; font-family: 'Noto Sans SC', sans-serif; }
   display: inline-block;
   width: 10px;
   height: 10px;
-  border: 2px solid rgba(0,0,0,0.3);
-  border-top-color: rgba(0,0,0,0.8);
+  border: 2px solid rgba(255,255,255,0.35);
+  border-top-color: rgba(255,255,255,0.9);
   border-radius: 50%;
   animation: spin 0.7s linear infinite;
   margin-right: 5px;
