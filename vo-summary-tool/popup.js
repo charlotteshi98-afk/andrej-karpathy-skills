@@ -173,34 +173,94 @@ function parseCNScript(arrayBuffer) {
   const ws = wb.Sheets[sheetName];
   const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
 
+  // Locate the header row (the one whose cells include the label "PerformID").
   let headerIdx = -1;
   for (let i = 0; i < rows.length; i++) {
-    if (rows[i].some(cell => String(cell).includes('PerformID'))) {
-      headerIdx = i;
-      break;
+    if (rows[i].some(cell => String(cell).trim() === 'PerformID')) { headerIdx = i; break; }
+  }
+  if (headerIdx === -1) {
+    for (let i = 0; i < rows.length; i++) {
+      if (rows[i].some(cell => String(cell).includes('PerformID'))) { headerIdx = i; break; }
     }
   }
   if (headerIdx === -1) throw new Error('Could not find header row with PerformID');
 
+  // Map column labels -> indices so we adapt to layouts where columns shift
+  // (e.g. the voiced 【配音部分】 sheet has an extra VOID column that pushes
+  // Textmap from C to D). Fall back to the documented positions if a label
+  // is missing.
+  const colMap = {};
+  rows[headerIdx].forEach((cell, j) => {
+    const label = String(cell).trim();
+    if (label && !(label in colMap)) colMap[label] = j;
+  });
+  const col = (label, fallback) => (label in colMap ? colMap[label] : fallback);
+  const cName    = col('Name', 1);
+  const cText    = col('Textmap', 2);
+  const cComment = col('Comment', 4);
+  const cPID     = col('PerformID', 7);
+  const cVOID    = col('VOID', 23);
+
+  const get = (row, idx) =>
+    String(idx != null && row[idx] != null ? row[idx] : '').trim();
+  const isPID = pid => /^\d+$/.test(pid);
+
   const scenes = [];
-  let currentScene = null;
 
-  for (let i = headerIdx + 1; i < rows.length; i++) {
-    const row       = rows[i];
-    const name      = String(row[1]  || '').trim();
-    const textmap   = String(row[2]  || '').trim();
-    const performId = String(row[7]  || '').trim();
-    const voidVal   = String(row[23] || '').trim();
-
-    if (performId) {
-      currentScene = { performId, type: name, description: textmap, lines: [] };
-      scenes.push(currentScene);
-    } else if (currentScene && (name || textmap)) {
-      // Capture every content row. Rows with no speaker (narration / stage
-      // directions) still carry story content and must not be dropped.
-      const hasVO   = voidVal !== '';
-      const speaker = name || '[narration]';
-      currentScene.lines.push({ speaker, text: textmap, hasVO });
+  if (sheetName.includes('总台本')) {
+    // MASTER layout: a numeric PerformID marks a new scene-header row.
+    let currentScene = null;
+    for (let i = headerIdx + 1; i < rows.length; i++) {
+      const row  = rows[i];
+      const name = get(row, cName);
+      const text = get(row, cText);
+      const pid  = get(row, cPID);
+      if (isPID(pid)) {
+        currentScene = { performId: pid, type: name, description: text, lines: [] };
+        scenes.push(currentScene);
+      } else if (currentScene && (name || text)) {
+        currentScene.lines.push({
+          speaker: name || '[narration]',
+          text,
+          hasVO:   get(row, cVOID) !== '',
+          comment: get(row, cComment),
+        });
+      }
+    }
+  } else {
+    // VOICED layout (no 总台本 sheet): PerformID is filled on every voiced
+    // line; group lines into scenes by the PerformID prefix (trailing 3
+    // digits are the line number). A row without a numeric PerformID is a
+    // label/staging row that describes the scene that follows.
+    const sceneByKey = {};
+    let pendingLabel = null;
+    for (let i = headerIdx + 1; i < rows.length; i++) {
+      const row  = rows[i];
+      const name = get(row, cName);
+      const text = get(row, cText);
+      const pid  = get(row, cPID);
+      if (isPID(pid)) {
+        const key = pid.length > 3 ? pid.slice(0, -3) : pid;
+        let scene = sceneByKey[key];
+        if (!scene) {
+          scene = {
+            performId:   key,
+            type:        pendingLabel ? pendingLabel.type : '',
+            description: pendingLabel ? pendingLabel.description : '',
+            lines:       [],
+          };
+          sceneByKey[key] = scene;
+          scenes.push(scene);
+        }
+        scene.lines.push({
+          speaker: name || '[narration]',
+          text,
+          hasVO:   get(row, cVOID) !== '',
+          comment: get(row, cComment),
+        });
+      } else if (name || text) {
+        pendingLabel = { type: name, description: text };
+      }
     }
   }
 
