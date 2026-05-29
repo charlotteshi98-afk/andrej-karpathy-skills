@@ -421,7 +421,6 @@ button { cursor: pointer; font-family: 'Noto Sans SC', sans-serif; }
 
 .output-text {
   width: 100%;
-  max-height: 260px;
   min-height: 80px;
   background: var(--surface);
   border: none;
@@ -432,7 +431,7 @@ button { cursor: pointer; font-family: 'Noto Sans SC', sans-serif; }
   resize: none;
   outline: none;
   font-family: 'Noto Sans SC', sans-serif;
-  overflow-y: auto;
+  overflow: hidden;
 }
 
 .output-review {

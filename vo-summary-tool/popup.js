@@ -459,6 +459,11 @@ function typeBadge(type) {
   return `<span class="type-badge ${cls}">${escapeHtml(type)}</span>`;
 }
 
+function autoResize(textarea) {
+  textarea.style.height = 'auto';
+  textarea.style.height = textarea.scrollHeight + 'px';
+}
+
 function escapeHtml(str) {
   return String(str)
     .replace(/&/g, '&amp;')
@@ -506,8 +511,10 @@ Be concise and useful for a production team. No preamble.`;
     const digest = buildScriptDigest(cnScenes);
     const text   = await callClaude(systemPrompt, digest);
 
-    document.getElementById('generalText').value = text;
+    const ta = document.getElementById('generalText');
+    ta.value = text;
     document.getElementById('generalOutput').style.display = 'block';
+    autoResize(ta);
   } catch (err) {
     setError('generalError', err.message);
   } finally {
