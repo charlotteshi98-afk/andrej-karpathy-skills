@@ -10,16 +10,34 @@ let cnFileName = '';
 let enLines    = [];
 let enFileName = '';
 let isCollapsed = false;
+let termBaseCN = new Set();
 
 /* ── Structured table data store ────────────────────────────── */
 let structuredRows = [];  // [{performId, type, description, lineCount, voCount, storySummary}]
 
 /* ── On load: restore API key ───────────────────────────────── */
-chrome.storage.local.get(['apiKey'], (result) => {
+chrome.storage.local.get(['apiKey', 'fontSize'], (result) => {
   if (result.apiKey) {
     document.getElementById('apiKeyInput').value = result.apiKey;
     updateKeyStatus(true);
   }
+  if (result.fontSize) {
+    const size = result.fontSize;
+    document.documentElement.style.setProperty('--output-font-size', size + 'px');
+    document.querySelectorAll('.fsz-btn').forEach(b => {
+      b.classList.toggle('active', Number(b.dataset.size) === size);
+    });
+  }
+});
+
+document.querySelectorAll('.fsz-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const size = Number(btn.dataset.size);
+    document.querySelectorAll('.fsz-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    document.documentElement.style.setProperty('--output-font-size', size + 'px');
+    chrome.storage.local.set({ fontSize: size });
+  });
 });
 
 /* ── Save API key ───────────────────────────────────────────── */
@@ -162,6 +180,48 @@ function renderENMeta() {
     <span class="meta-chip gold">${enLines.length} VO lines</span>
     <span class="meta-chip">${enFileName}</span>
   `;
+}
+
+/* ================================================================
+   TERM BASE UPLOAD
+   ================================================================ */
+const tbZone  = document.getElementById('tbUploadZone');
+const tbInput = document.getElementById('tbFileInput');
+
+tbZone.addEventListener('click', () => tbInput.click());
+tbInput.addEventListener('change', () => { if (tbInput.files[0]) handleTBFile(tbInput.files[0]); });
+tbZone.addEventListener('dragover', e => { e.preventDefault(); tbZone.classList.add('drag-over'); });
+tbZone.addEventListener('dragleave', () => tbZone.classList.remove('drag-over'));
+tbZone.addEventListener('drop', e => {
+  e.preventDefault();
+  tbZone.classList.remove('drag-over');
+  const f = e.dataTransfer.files[0];
+  if (f) handleTBFile(f);
+});
+
+function handleTBFile(file) {
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    try {
+      const wb = XLSX.read(e.target.result, { type: 'array' });
+      const ws = wb.Sheets[wb.SheetNames[0]];
+      const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
+      termBaseCN = new Set(
+        rows.slice(1)  // skip header row
+          .map(r => String(r[0] || '').trim())
+          .filter(Boolean)
+      );
+      tbZone.classList.add('has-file');
+      tbZone.querySelector('.upload-label').textContent = file.name;
+      tbZone.querySelector('.upload-icon').textContent = '✓';
+      const meta = document.getElementById('tbMeta');
+      meta.style.display = 'flex';
+      meta.innerHTML = `<span class="meta-chip gold">${termBaseCN.size} terms loaded</span><span class="meta-chip">${file.name}</span>`;
+    } catch (err) {
+      setError('glossaryError', 'Term base parse error: ' + err.message);
+    }
+  };
+  reader.readAsArrayBuffer(file);
 }
 
 /* ================================================================
@@ -580,27 +640,34 @@ CN Term|Category|Context|Option A|Reason A|Option B|Reason B|Option C|Reason C
 - Options: 3 English translation candidates with brief reasoning
 Output ONLY data lines, no header, no extra text. Extract 20-40 terms.`;
 
-    const raw  = await callClaude(systemPrompt, digest);
+    const tbList = termBaseCN.size > 0
+      ? `\n\nTerm base (already translated — skip these CN terms):\n${[...termBaseCN].join(', ')}`
+      : '';
+    const raw  = await callClaude(systemPrompt, digest + tbList);
     const terms = raw.split('\n')
       .map(line => parsePipeRow(line))
       .filter(cols => cols.length >= 9 && cols[0]);
 
+    const filteredTerms = termBaseCN.size > 0
+      ? terms.filter(cols => !termBaseCN.has(cols[0].trim()))
+      : terms;
+
     // Sort by Category then CN Term
-    terms.sort((a, b) => {
+    filteredTerms.sort((a, b) => {
       const catCmp = a[1].localeCompare(b[1]);
       return catCmp !== 0 ? catCmp : a[0].localeCompare(b[0]);
     });
 
     // Auto-download Excel
-    downloadGlossaryExcel(terms);
+    downloadGlossaryExcel(filteredTerms);
 
     // Preview first 12
-    renderGlossaryPreview(terms.slice(0, 12));
+    renderGlossaryPreview(filteredTerms.slice(0, 12));
 
     // Plain text summary
     const cats = {};
-    terms.forEach(t => { cats[t[1]] = (cats[t[1]] || 0) + 1; });
-    const summary = `${terms.length} terms extracted.\n` +
+    filteredTerms.forEach(t => { cats[t[1]] = (cats[t[1]] || 0) + 1; });
+    const summary = `${filteredTerms.length} terms extracted.\n` +
       Object.entries(cats).map(([k, v]) => `  ${k}: ${v}`).join('\n');
     document.getElementById('glossarySummary').textContent = summary;
     document.getElementById('glossaryOutput').style.display = 'block';

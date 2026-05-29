@@ -18,6 +18,11 @@
       <span class="vo-badge">VO</span>
       <span class="header-title">Script Summary Tool</span>
     </div>
+    <div class="font-size-toggle">
+      <button class="fsz-btn" data-size="11">S</button>
+      <button class="fsz-btn active" data-size="13">M</button>
+      <button class="fsz-btn" data-size="15">L</button>
+    </div>
     <button id="toggleCollapse" class="collapse-btn">−</button>
   </div>
 
@@ -105,6 +110,14 @@
 
     <!-- TAB: GLOSSARY -->
     <div id="tab-glossary" class="tab-content">
+      <div class="upload-zone upload-zone-sm" id="tbUploadZone">
+        <div class="upload-inner">
+          <div class="upload-icon">↑</div>
+          <div class="upload-label">Drop term base (.xlsx) here or click to upload</div>
+          <input type="file" id="tbFileInput" accept=".xlsx" style="display:none" />
+        </div>
+      </div>
+      <div id="tbMeta" class="meta-chips" style="display:none"></div>
       <div class="action-row">
         <button id="generateGlossary" class="btn-gold">Extract Terms</button>
       </div>
