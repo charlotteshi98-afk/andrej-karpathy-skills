@@ -290,38 +290,42 @@ function parseCNScript(arrayBuffer) {
       }
     }
   } else {
-    // VOICED layout (no 总台本 sheet): PerformID is filled on every voiced
-    // line; group lines into scenes by the PerformID prefix (trailing 3
-    // digits are the line number). A row without a numeric PerformID is a
-    // label/staging row that describes the scene that follows.
-    const sceneByKey = {};
-    let pendingLabel = null;
+    // VOICED layout: a row with a numeric PerformID in col 8 is a scene
+    // header whose Name=type and Textmap=title. If the header row itself
+    // has a VOID it is a single-line scene (Tips/Ongoing one-liners) and
+    // no following rows belong to it. If the header has no VOID it is a
+    // multi-line scene (GAL) and subsequent non-PID rows are its lines.
+    let currentScene = null;
+    let multiLine    = false;
     for (let i = headerIdx + 1; i < rows.length; i++) {
-      const row  = rows[i];
-      const name = get(row, cName);
-      const text = get(row, cText);
-      const pid  = get(row, cPID);
+      const row     = rows[i];
+      const name    = get(row, cName);
+      const text    = get(row, cText);
+      const pid     = get(row, cPID);
+      const voidVal = get(row, cVOID);
       if (isPID(pid)) {
-        const key = pid.length > 3 ? pid.slice(0, -3) : pid;
-        let scene = sceneByKey[key];
-        if (!scene) {
-          scene = {
-            performId:   key,
-            type:        pendingLabel ? pendingLabel.type : '',
-            description: pendingLabel ? pendingLabel.description : '',
-            lines:       [],
-          };
-          sceneByKey[key] = scene;
-          scenes.push(scene);
+        const hasVO = isValidVOID(voidVal);
+        currentScene = { performId: pid, type: name, description: text, lines: [] };
+        scenes.push(currentScene);
+        if (hasVO) {
+          // Single-line scene: the header row IS the only voiced line
+          currentScene.lines.push({
+            speaker: name || '[narration]',
+            text,
+            hasVO:   true,
+            comment: get(row, cComment),
+          });
+          multiLine = false;
+        } else {
+          multiLine = true;
         }
-        scene.lines.push({
+      } else if (currentScene && multiLine && (name || text)) {
+        currentScene.lines.push({
           speaker: name || '[narration]',
           text,
-          hasVO:   isValidVOID(get(row, cVOID)),
+          hasVO:   isValidVOID(voidVal),
           comment: get(row, cComment),
         });
-      } else if (name || text) {
-        pendingLabel = { type: name, description: text };
       }
     }
   }
