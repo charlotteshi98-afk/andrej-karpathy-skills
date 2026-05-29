@@ -17,9 +17,8 @@
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
 html, body {
-  width: 480px;
-  min-width: 480px;
-  max-width: 480px;
+  width: 100%;
+  min-width: 360px;
   background: var(--bg);
   color: var(--text);
   font-family: 'Noto Sans SC', system-ui, sans-serif;
@@ -28,8 +27,8 @@ html, body {
 }
 
 #app {
-  width: 480px;
-  max-height: 680px;
+  width: 100%;
+  max-height: 100vh;
   overflow-y: auto;
   overflow-x: hidden;
   display: flex;

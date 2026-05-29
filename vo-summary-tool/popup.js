@@ -195,9 +195,12 @@ function parseCNScript(arrayBuffer) {
     if (performId) {
       currentScene = { performId, type: name, description: textmap, lines: [] };
       scenes.push(currentScene);
-    } else if (currentScene && name && textmap) {
-      const hasVO = voidVal !== '';
-      currentScene.lines.push({ speaker: name, text: textmap, hasVO });
+    } else if (currentScene && (name || textmap)) {
+      // Capture every content row. Rows with no speaker (narration / stage
+      // directions) still carry story content and must not be dropped.
+      const hasVO   = voidVal !== '';
+      const speaker = name || '[narration]';
+      currentScene.lines.push({ speaker, text: textmap, hasVO });
     }
   }
 
