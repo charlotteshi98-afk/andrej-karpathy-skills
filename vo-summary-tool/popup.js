@@ -714,10 +714,9 @@ Output ONLY the data lines, no headers, no extra text.`;
 
     document.getElementById('structuredExportBtns').style.display = 'flex';
     const tsvRows = structuredRows.map(r =>
-      [r.performId, r.type, r.description, r.lineCount, r.voCount, r.storySummary || ''].join('	')
+      [r.performId, r.type, r.description, r.lineCount, r.voCount, r.storySummary || ''].join('\t')
     );
-    const tsvContent = ['PerformID	类型	场景描述	台词数	VO数	故事总结', ...tsvRows].join('
-');
+    const tsvContent = ['PerformID\t类型\t场景描述\t台词数\tVO数\t故事总结', ...tsvRows].join('\n');
     document.getElementById('saveStructuredToArchive').style.display = '';
     document.getElementById('saveStructuredToArchive').onclick = () => {
       saveToArchive('Structured', `${cnFileName} — Scene Breakdown`, tsvContent);
@@ -820,10 +819,9 @@ Output ONLY data lines, no header, no extra text. Extract 20-40 terms.`;
       Object.entries(cats).map(([k, v]) => `  ${k}: ${v}`).join('\n');
     document.getElementById('glossarySummary').textContent = summary;
     document.getElementById('glossaryOutput').style.display = 'block';
-    const glossaryTsv = ['CN Term	Category	Context	Option A	Option B	Option C',
-      ...filteredTerms.map(cols => [cols[0],cols[1],cols[2],cols[3],cols[5],cols[7]].join('	'))
-    ].join('
-');
+    const glossaryTsv = ['CN Term\tCategory\tContext\tOption A\tOption B\tOption C',
+      ...filteredTerms.map(cols => [cols[0],cols[1],cols[2],cols[3],cols[5],cols[7]].join('\t'))
+    ].join('\n');
     document.getElementById('saveGlossaryToArchive').style.display = '';
     document.getElementById('saveGlossaryToArchive').onclick = () => {
       saveToArchive('Glossary', `${cnFileName} — Glossary`, glossaryTsv);
