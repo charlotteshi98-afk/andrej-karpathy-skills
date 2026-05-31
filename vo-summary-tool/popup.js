@@ -15,7 +15,6 @@ let termBaseCN = new Set();
 /* ── Structured table data store ────────────────────────────── */
 let structuredRows = [];  // [{performId, type, description, lineCount, voCount, storySummary}]
 let structuredCols = [0,1,2,3,4,5];
-let enSelectedLang = 'en';
 let archives = [];
 
 /* ── On load: restore API key ───────────────────────────────── */
@@ -84,11 +83,13 @@ document.querySelectorAll('.tab').forEach(btn => {
 
 /* ── Language toggle (General tab) ─────────────────────────── */
 let selectedLang = 'zh';
-document.querySelectorAll('.lang-toggle:not(#enLangToggle) .lang-btn').forEach(btn => {
+document.querySelectorAll('.lang-toggle .lang-btn').forEach(btn => {
   btn.addEventListener('click', () => {
     btn.closest('.lang-toggle').querySelectorAll('.lang-btn').forEach(b => b.classList.remove('active'));
     btn.classList.add('active');
     selectedLang = btn.dataset.lang;
+    document.getElementById('enUploadInGeneral').style.display =
+      selectedLang === 'en' ? 'block' : 'none';
   });
 });
 
@@ -110,18 +111,6 @@ document.getElementById('structuredColSelector').addEventListener('click', e => 
   }
 });
 
-/* ── EN tab lang toggle + pill toggles ──────────────────────── */
-document.querySelectorAll('#enLangToggle .lang-btn').forEach(btn => {
-  btn.addEventListener('click', () => {
-    document.querySelectorAll('#enLangToggle .lang-btn').forEach(b => b.classList.remove('active'));
-    btn.classList.add('active');
-    enSelectedLang = btn.dataset.lang;
-  });
-});
-
-document.querySelectorAll('#enSummaryOptions .pill').forEach(pill => {
-  pill.addEventListener('click', () => pill.classList.toggle('active'));
-});
 
 /* ── Archive helpers ─────────────────────────────────────────── */
 function saveToArchive(source, label, content) {
@@ -264,7 +253,7 @@ function handleENFile(file) {
       enZone.querySelector('.upload-icon').textContent = '✓';
       renderENMeta();
     } catch (err) {
-      setError('enReviewError', err.message);
+      setError('generalError', err.message);
     }
   };
   reader.readAsArrayBuffer(file);
@@ -577,7 +566,9 @@ function parsePipeRow(line) {
    FEATURE 1 — GENERAL SUMMARY
    ================================================================ */
 document.getElementById('generateGeneral').addEventListener('click', async () => {
-  if (!cnScenes.length) { setError('generalError', 'Please upload a CN script first.'); return; }
+  const usingEN = selectedLang === 'en';
+  if (!usingEN && !cnScenes.length) { setError('generalError', 'Please upload a CN script first.'); return; }
+  if (usingEN && !enLines.length)   { setError('generalError', 'Please upload an EN VO tracker first.'); return; }
   setError('generalError', '');
 
   const btn = document.getElementById('generateGeneral');
@@ -595,23 +586,28 @@ document.getElementById('generateGeneral').addEventListener('click', async () =>
     };
     const selectedOptions = activePills.map(k => optionLabels[k]).join(', ') || 'general overview';
 
-    const langInstruction = selectedLang === 'zh'
-      ? 'Respond entirely in Simplified Chinese (简体中文).'
-      : 'Respond entirely in English.';
-
-    const systemPrompt = `You are a professional game localization producer.
+    let digest, systemPrompt;
+    if (usingEN) {
+      digest = enLines.map(l => `[${l.voId}] ${l.character}: ${l.latestEN || l.englishScript}`).join('\n');
+      systemPrompt = `You are a professional game localization producer reviewing English VO scripts.
+Summarize the key content in approximately ${length} words.
+Focus on: ${selectedOptions}.
+Respond entirely in English.
+Be concise and useful for a production team. No preamble.`;
+    } else {
+      digest = buildScriptDigest(cnScenes);
+      systemPrompt = `You are a professional game localization producer.
 Summarize the provided VO script digest in approximately ${length} words.
 Focus on: ${selectedOptions}.
-${langInstruction}
+Respond entirely in Simplified Chinese (简体中文).
 Be concise and useful for a production team. No preamble.`;
+    }
 
-    const digest = buildScriptDigest(cnScenes);
-    const text   = await callClaude(systemPrompt, digest);
-
+    const text = await callClaude(systemPrompt, digest);
     const ta = document.getElementById('generalText');
     ta.value = text;
     document.getElementById('generalOutput').style.display = 'block';
-    autoResize(ta);
+    requestAnimationFrame(() => autoResize(ta));
     document.getElementById('saveGeneralToArchive').style.display = '';
   } catch (err) {
     setError('generalError', err.message);
@@ -621,7 +617,9 @@ Be concise and useful for a production team. No preamble.`;
 });
 
 document.getElementById('saveGeneralToArchive').addEventListener('click', () => {
-  saveToArchive('CN', `${cnFileName} — Summary`, document.getElementById('generalText').value);
+  const src   = selectedLang === 'en' ? 'EN' : 'CN';
+  const fname = selectedLang === 'en' ? enFileName : cnFileName;
+  saveToArchive(src, `${fname} — Summary`, document.getElementById('generalText').value);
 });
 
 document.getElementById('copyGeneral').addEventListener('click', () => {
@@ -861,179 +859,6 @@ function downloadGlossaryExcel(terms) {
   XLSX.writeFile(wb, `${baseName(cnFileName)}_glossary.xlsx`);
 }
 
-/* ================================================================
-   FEATURE 4 — EN REVIEW
-   ================================================================ */
-
-/* ── EN Summary ─────────────────────────────────────────────── */
-document.getElementById('generateEnSummary').addEventListener('click', async () => {
-  if (!enLines.length) { setError('enReviewError', 'Please upload an EN VO tracker first.'); return; }
-  setError('enReviewError', '');
-  const btn = document.getElementById('generateEnSummary');
-  setBusy(btn, true);
-  try {
-    const length = document.getElementById('enSummaryLength').value;
-    const optionLabels = {
-      characters: 'Characters & relationships',
-      plot:       'Key plot events',
-      themes:     'Themes & tone',
-      vo:         'VO content summary',
-    };
-    const selectedOptions = [...document.querySelectorAll('#enSummaryOptions .pill.active')]
-      .map(p => optionLabels[p.dataset.opt]).join(', ') || 'general overview';
-    const langInstruction = enSelectedLang === 'zh'
-      ? 'Respond entirely in Simplified Chinese (简体中文).'
-      : 'Respond entirely in English.';
-    const digest = enLines
-      .map(l => `[${l.voId}] ${l.character}: ${l.latestEN || l.englishScript}`)
-      .join('\n');
-    const systemPrompt = `You are a game localization producer reviewing English VO scripts.
-Summarize the key content in approximately ${length} words.
-Focus on: ${selectedOptions}.
-${langInstruction}
-Be practical and production-focused. No preamble.`;
-
-    const text = await callClaude(systemPrompt, digest);
-    const ta = document.getElementById('enSummaryText');
-    ta.value = text;
-    ta.style.display = '';
-    document.getElementById('enReviewContent').style.display = 'none';
-    document.getElementById('enOutputLabel').textContent = 'EN Summary';
-    document.getElementById('enReviewOutput').style.display = 'block';
-    document.getElementById('saveEnToArchive').style.display = '';
-    autoResize(ta);
-  } catch (err) {
-    setError('enReviewError', err.message);
-  } finally {
-    setBusy(btn, false);
-  }
-});
-
-document.getElementById('saveEnToArchive').addEventListener('click', () => {
-  saveToArchive('EN', `${enFileName} — EN Summary`, document.getElementById('enSummaryText').value);
-});
-
-/* ── EN Table ───────────────────────────────────────────────── */
-document.getElementById('generateEnTable').addEventListener('click', async () => {
-  if (!enLines.length) { setError('enReviewError', 'Please upload an EN VO tracker first.'); return; }
-  setError('enReviewError', '');
-
-  const btn = document.getElementById('generateEnTable');
-  setBusy(btn, true);
-
-  try {
-    document.getElementById('enSummaryText').style.display = 'none';
-    document.getElementById('enReviewContent').style.display = '';
-    document.getElementById('saveEnToArchive').style.display = 'none';
-    document.getElementById('enOutputLabel').textContent = 'EN Table';
-    const outputArea = document.getElementById('enReviewOutput');
-    outputArea.style.display = 'block';
-    const contentDiv = document.getElementById('enReviewContent');
-
-    // Group by PerformID (4th segment of VO ID split by _)
-    const groups = {};
-    enLines.forEach(l => {
-      const parts = l.voId.split('_');
-      const pid = parts.length >= 4 ? parts.slice(0, 4).join('_') : (l.performId || l.voId);
-      if (!groups[pid]) groups[pid] = [];
-      groups[pid].push(l);
-    });
-
-    const pids = Object.keys(groups);
-    const rows = [];
-
-    for (const pid of pids) {
-      const group = groups[pid];
-      const chars = [...new Set(group.map(l => l.character).filter(Boolean))].join(', ');
-
-      // Ask Claude to summarize this group
-      const snippet = group.slice(0, 20).map(l =>
-        `${l.character}: ${l.latestEN || l.englishScript}`
-      ).join('\n');
-
-      const sysEn = `Summarize this EN VO group in ≤20 English words for a production table. Return ONLY the summary.`;
-      let summary = '…';
-      try {
-        summary = await callClaude(sysEn, snippet);
-        summary = summary.trim();
-      } catch (_) { summary = '(error)'; }
-
-      rows.push({ pid, count: group.length, chars, summary });
-      contentDiv.innerHTML = renderENTable(rows, pids.length);
-    }
-  } catch (err) {
-    setError('enReviewError', err.message);
-  } finally {
-    setBusy(btn, false);
-  }
-});
-
-function renderENTable(rows, total) {
-  const headers = ['Perform ID', 'Lines', 'Characters', 'Summary'];
-  const ths = headers.map(h => `<th>${h}</th>`).join('');
-  const trs = rows.map(r => `<tr>
-    <td style="font-family:'Space Mono',monospace;font-size:10px">${escapeHtml(r.pid)}</td>
-    <td style="text-align:center">${r.count}</td>
-    <td>${escapeHtml(r.chars)}</td>
-    <td>${escapeHtml(r.summary)}</td>
-  </tr>`).join('');
-  const progress = rows.length < total
-    ? `<div style="padding:6px 10px;font-size:10px;color:var(--text-dim);font-family:'Space Mono',monospace">Processing ${rows.length}/${total} groups…</div>`
-    : '';
-  return `${progress}<table class="data-table"><thead><tr>${ths}</tr></thead><tbody>${trs}</tbody></table>`;
-}
-
-/* ── Review (requires both files) ──────────────────────────── */
-document.getElementById('generateReview').addEventListener('click', async () => {
-  if (!cnScenes.length || !enLines.length) {
-    setError('enReviewError', 'Please upload both the CN script and EN tracker first.');
-    return;
-  }
-  setError('enReviewError', '');
-
-  const btn = document.getElementById('generateReview');
-  setBusy(btn, true);
-
-  try {
-    document.getElementById('enSummaryText').style.display = 'none';
-    document.getElementById('enReviewContent').style.display = '';
-    document.getElementById('saveEnToArchive').style.display = 'none';
-    // Build a side-by-side sample
-    const sample = enLines.slice(0, 80).map(l =>
-      `[${l.voId}]\nCN: ${l.chineseScript}\nEN: ${l.latestEN || l.englishScript}\nNotes: ${l.performanceNotes || '—'}`
-    ).join('\n---\n');
-
-    const systemPrompt = `You are a senior game localization QA reviewer.
-Review the provided CN-EN VO pairs and identify:
-## Translation Accuracy Issues
-## Tone & Character Voice Issues
-## Performance Notes Quality
-## Overall Recommendation
-
-Format with ## headers and be specific. Reference VO IDs where relevant.`;
-
-    const text = await callClaude(systemPrompt, sample);
-    document.getElementById('enOutputLabel').textContent = 'Review';
-    document.getElementById('enReviewContent').innerHTML = markdownToHtml(text);
-    document.getElementById('enReviewOutput').style.display = 'block';
-  } catch (err) {
-    setError('enReviewError', err.message);
-  } finally {
-    setBusy(btn, false);
-  }
-});
-
-document.getElementById('copyEnReview').addEventListener('click', () => {
-  const ta = document.getElementById('enSummaryText');
-  const text = ta.style.display !== 'none'
-    ? ta.value
-    : document.getElementById('enReviewContent').innerText;
-  navigator.clipboard.writeText(text).then(() => {
-    const btn = document.getElementById('copyEnReview');
-    btn.textContent = 'Copied!';
-    setTimeout(() => { btn.textContent = 'Copy'; }, 1500);
-  });
-});
 
 /* ================================================================
    MARKDOWN → HTML (minimal)
