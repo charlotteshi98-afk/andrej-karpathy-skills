@@ -149,8 +149,7 @@ function renderArchive() {
   const srcClass = { CN: 'cn', EN: 'en', Glossary: 'gls', Structured: 'cn' };
   list.innerHTML = archives.map(e => {
     const ts      = new Date(e.timestamp).toLocaleString();
-    const preview = e.content.slice(0, 80).replace(/
-/g, ' ');
+    const preview = e.content.slice(0, 80).replace(/\n/g, ' ');
     const cls     = srcClass[e.source] || 'cn';
     return `<div class="archive-entry">
       <div class="archive-meta">
