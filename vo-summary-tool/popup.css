@@ -488,6 +488,9 @@ button { cursor: pointer; font-family: 'Noto Sans SC', sans-serif; }
   border-bottom: 1px solid var(--border);
   text-align: left;
   white-space: nowrap;
+  resize: horizontal;
+  overflow: auto;
+  min-width: 40px;
 }
 
 .data-table td {
@@ -495,10 +498,8 @@ button { cursor: pointer; font-family: 'Noto Sans SC', sans-serif; }
   border-bottom: 1px solid var(--border);
   color: var(--text);
   vertical-align: top;
-  max-width: 160px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  white-space: normal;
+  word-break: break-word;
 }
 
 .data-table tr:hover td { background: rgba(37,99,235,0.04); }
@@ -565,3 +566,73 @@ button { cursor: pointer; font-family: 'Noto Sans SC', sans-serif; }
   margin-right: 5px;
   vertical-align: middle;
 }
+
+.output-text-en {
+  font-family: Arial, sans-serif;
+}
+
+/* ─── Archive ─────────────────────────────────────────────────── */
+.archive-empty {
+  font-size: 12px;
+  color: var(--text-dimmer);
+  text-align: center;
+  padding: 20px;
+}
+.archive-entry {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  padding: 8px 10px;
+  margin: 0 0 8px;
+}
+.archive-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 4px;
+  flex-wrap: wrap;
+}
+.archive-ts {
+  font-family: 'Space Mono', monospace;
+  font-size: 10px;
+  color: var(--text-dimmer);
+}
+.archive-source {
+  font-family: 'Space Mono', monospace;
+  font-size: 9px;
+  font-weight: 700;
+  padding: 1px 6px;
+  border-radius: 3px;
+}
+.archive-source.cn  { background: rgba(5,150,105,0.1);  color: #047857; border: 1px solid rgba(5,150,105,0.25); }
+.archive-source.en  { background: rgba(37,99,235,0.1);  color: #1d4ed8; border: 1px solid rgba(37,99,235,0.25); }
+.archive-source.gls { background: rgba(124,58,237,0.1); color: #6d28d9; border: 1px solid rgba(124,58,237,0.25); }
+.archive-label {
+  font-size: 11px;
+  color: var(--text-dim);
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.archive-preview {
+  font-size: 11px;
+  color: var(--text);
+  margin: 4px 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.archive-full {
+  display: none;
+  margin-top: 6px;
+  border-top: 1px solid var(--border);
+  padding-top: 6px;
+  font-size: var(--output-font-size);
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--text);
+  max-height: 200px;
+  overflow-y: auto;
+}
+.archive-actions { display: flex; gap: 6px; margin-top: 4px; }

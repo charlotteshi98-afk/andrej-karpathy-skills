@@ -14,9 +14,12 @@ let termBaseCN = new Set();
 
 /* ── Structured table data store ────────────────────────────── */
 let structuredRows = [];  // [{performId, type, description, lineCount, voCount, storySummary}]
+let structuredCols = [0,1,2,3,4,5];
+let enSelectedLang = 'en';
+let archives = [];
 
 /* ── On load: restore API key ───────────────────────────────── */
-chrome.storage.local.get(['apiKey', 'fontSize'], (result) => {
+chrome.storage.local.get(['apiKey', 'fontSize', 'structuredCols', 'archives'], (result) => {
   if (result.apiKey) {
     document.getElementById('apiKeyInput').value = result.apiKey;
     updateKeyStatus(true);
@@ -28,6 +31,14 @@ chrome.storage.local.get(['apiKey', 'fontSize'], (result) => {
       b.classList.toggle('active', Number(b.dataset.size) === size);
     });
   }
+  if (result.structuredCols) {
+    structuredCols = result.structuredCols;
+    document.querySelectorAll('#structuredColSelector .col-pill').forEach(p => {
+      p.classList.toggle('active', structuredCols.includes(Number(p.dataset.col)));
+    });
+  }
+  archives = result.archives || [];
+  renderArchive();
 });
 
 document.querySelectorAll('.fsz-btn').forEach(btn => {
@@ -73,17 +84,104 @@ document.querySelectorAll('.tab').forEach(btn => {
 
 /* ── Language toggle (General tab) ─────────────────────────── */
 let selectedLang = 'zh';
-document.querySelectorAll('.lang-btn').forEach(btn => {
+document.querySelectorAll('.lang-toggle:not(#enLangToggle) .lang-btn').forEach(btn => {
   btn.addEventListener('click', () => {
-    document.querySelectorAll('.lang-btn').forEach(b => b.classList.remove('active'));
+    btn.closest('.lang-toggle').querySelectorAll('.lang-btn').forEach(b => b.classList.remove('active'));
     btn.classList.add('active');
     selectedLang = btn.dataset.lang;
   });
 });
 
 /* ── Pill toggles (General tab) ────────────────────────────── */
-document.querySelectorAll('.pill').forEach(pill => {
+document.querySelectorAll('#summaryOptions .pill').forEach(pill => {
   pill.addEventListener('click', () => pill.classList.toggle('active'));
+});
+
+/* ── Column selector (Structured tab) ──────────────────────── */
+document.getElementById('structuredColSelector').addEventListener('click', e => {
+  const pill = e.target.closest('.col-pill');
+  if (!pill) return;
+  pill.classList.toggle('active');
+  structuredCols = [...document.querySelectorAll('#structuredColSelector .col-pill.active')]
+    .map(p => Number(p.dataset.col));
+  chrome.storage.local.set({ structuredCols });
+  if (structuredRows.length) {
+    document.getElementById('structuredTable').innerHTML = renderStructuredTable(structuredRows);
+  }
+});
+
+/* ── EN tab lang toggle + pill toggles ──────────────────────── */
+document.querySelectorAll('#enLangToggle .lang-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('#enLangToggle .lang-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    enSelectedLang = btn.dataset.lang;
+  });
+});
+
+document.querySelectorAll('#enSummaryOptions .pill').forEach(pill => {
+  pill.addEventListener('click', () => pill.classList.toggle('active'));
+});
+
+/* ── Archive helpers ─────────────────────────────────────────── */
+function saveToArchive(source, label, content) {
+  const entry = {
+    id: Date.now() + Math.random().toString(36).slice(2),
+    timestamp: new Date().toISOString(),
+    source,
+    label,
+    content,
+  };
+  archives.unshift(entry);
+  chrome.storage.local.set({ archives });
+  renderArchive();
+}
+
+function renderArchive() {
+  const list  = document.getElementById('archiveList');
+  const empty = document.getElementById('archiveEmpty');
+  if (!archives.length) {
+    list.innerHTML = '';
+    empty.style.display = 'block';
+    return;
+  }
+  empty.style.display = 'none';
+  const srcClass = { CN: 'cn', EN: 'en', Glossary: 'gls', Structured: 'cn' };
+  list.innerHTML = archives.map(e => {
+    const ts      = new Date(e.timestamp).toLocaleString();
+    const preview = e.content.slice(0, 80).replace(/
+/g, ' ');
+    const cls     = srcClass[e.source] || 'cn';
+    return `<div class="archive-entry">
+      <div class="archive-meta">
+        <span class="archive-ts">${ts}</span>
+        <span class="archive-source ${cls}">${escapeHtml(e.source)}</span>
+        <span class="archive-label" title="${escapeHtml(e.label)}">${escapeHtml(e.label)}</span>
+      </div>
+      <div class="archive-preview">${escapeHtml(preview)}${e.content.length > 80 ? '…' : ''}</div>
+      <div class="archive-full" id="af-${e.id}">${escapeHtml(e.content)}</div>
+      <div class="archive-actions">
+        <button class="btn-copy archive-view-btn" data-id="${e.id}">View</button>
+        <button class="btn-copy archive-del-btn" data-id="${e.id}" style="color:var(--accent3)">Delete</button>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+document.getElementById('archiveList').addEventListener('click', e => {
+  const viewBtn = e.target.closest('.archive-view-btn');
+  const delBtn  = e.target.closest('.archive-del-btn');
+  if (viewBtn) {
+    const full    = document.getElementById('af-' + viewBtn.dataset.id);
+    const showing = full.style.display === 'block';
+    full.style.display = showing ? 'none' : 'block';
+    viewBtn.textContent = showing ? 'View' : 'Hide';
+  }
+  if (delBtn) {
+    archives = archives.filter(a => a.id !== delBtn.dataset.id);
+    chrome.storage.local.set({ archives });
+    renderArchive();
+  }
 });
 
 /* ================================================================
@@ -515,11 +613,16 @@ Be concise and useful for a production team. No preamble.`;
     ta.value = text;
     document.getElementById('generalOutput').style.display = 'block';
     autoResize(ta);
+    document.getElementById('saveGeneralToArchive').style.display = '';
   } catch (err) {
     setError('generalError', err.message);
   } finally {
     setBusy(btn, false);
   }
+});
+
+document.getElementById('saveGeneralToArchive').addEventListener('click', () => {
+  saveToArchive('CN', `${cnFileName} — Summary`, document.getElementById('generalText').value);
 });
 
 document.getElementById('copyGeneral').addEventListener('click', () => {
@@ -611,6 +714,15 @@ Output ONLY the data lines, no headers, no extra text.`;
     }
 
     document.getElementById('structuredExportBtns').style.display = 'flex';
+    const tsvRows = structuredRows.map(r =>
+      [r.performId, r.type, r.description, r.lineCount, r.voCount, r.storySummary || ''].join('	')
+    );
+    const tsvContent = ['PerformID	类型	场景描述	台词数	VO数	故事总结', ...tsvRows].join('
+');
+    document.getElementById('saveStructuredToArchive').style.display = '';
+    document.getElementById('saveStructuredToArchive').onclick = () => {
+      saveToArchive('Structured', `${cnFileName} — Scene Breakdown`, tsvContent);
+    };
   } catch (err) {
     setError('structuredError', err.message);
   } finally {
@@ -619,20 +731,24 @@ Output ONLY the data lines, no headers, no extra text.`;
 });
 
 function renderStructuredTable(rows) {
-  const headers = ['PerformID', '类型', '场景描述', '台词', 'VO', '故事总结'];
-  const ths = headers.map(h => `<th>${h}</th>`).join('');
+  const allHeaders = ['PerformID', '类型', '场景描述', '台词', 'VO', '故事总结'];
+  const ths = allHeaders
+    .filter((_, i) => structuredCols.includes(i))
+    .map(h => `<th>${h}</th>`).join('');
   const trs = rows.map(r => {
     const summaryCell = r.storySummary === null
       ? `<span class="shimmer">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span>`
       : escapeHtml(r.storySummary);
-    return `<tr>
-      <td style="font-family:'Space Mono',monospace;font-size:10px">${escapeHtml(r.performId)}</td>
-      <td>${typeBadge(r.type)}</td>
-      <td title="${escapeHtml(r.description)}">${escapeHtml(r.shortDesc || r.description)}</td>
-      <td style="text-align:center">${r.lineCount}</td>
-      <td style="text-align:center;color:var(--accent)">${r.voCount}</td>
-      <td>${summaryCell}</td>
-    </tr>`;
+    const allCells = [
+      `<td style="font-family:'Space Mono',monospace;font-size:10px">${escapeHtml(r.performId)}</td>`,
+      `<td>${typeBadge(r.type)}</td>`,
+      `<td title="${escapeHtml(r.description)}">${escapeHtml(r.shortDesc || r.description)}</td>`,
+      `<td style="text-align:center">${r.lineCount}</td>`,
+      `<td style="text-align:center;color:var(--accent)">${r.voCount}</td>`,
+      `<td>${summaryCell}</td>`,
+    ];
+    const cells = allCells.filter((_, i) => structuredCols.includes(i)).join('');
+    return `<tr>${cells}</tr>`;
   }).join('');
   return `<table class="data-table"><thead><tr>${ths}</tr></thead><tbody>${trs}</tbody></table>`;
 }
@@ -705,6 +821,14 @@ Output ONLY data lines, no header, no extra text. Extract 20-40 terms.`;
       Object.entries(cats).map(([k, v]) => `  ${k}: ${v}`).join('\n');
     document.getElementById('glossarySummary').textContent = summary;
     document.getElementById('glossaryOutput').style.display = 'block';
+    const glossaryTsv = ['CN Term	Category	Context	Option A	Option B	Option C',
+      ...filteredTerms.map(cols => [cols[0],cols[1],cols[2],cols[3],cols[5],cols[7]].join('	'))
+    ].join('
+');
+    document.getElementById('saveGlossaryToArchive').style.display = '';
+    document.getElementById('saveGlossaryToArchive').onclick = () => {
+      saveToArchive('Glossary', `${cnFileName} — Glossary`, glossaryTsv);
+    };
   } catch (err) {
     setError('glossaryError', err.message);
   } finally {
@@ -748,28 +872,48 @@ function downloadGlossaryExcel(terms) {
 document.getElementById('generateEnSummary').addEventListener('click', async () => {
   if (!enLines.length) { setError('enReviewError', 'Please upload an EN VO tracker first.'); return; }
   setError('enReviewError', '');
-
   const btn = document.getElementById('generateEnSummary');
   setBusy(btn, true);
-
   try {
-    const digest = enLines.slice(0, 200).map(l =>
-      `[${l.voId}] ${l.character}: ${l.latestEN || l.englishScript}`
-    ).join('\n');
-
+    const length = document.getElementById('enSummaryLength').value;
+    const optionLabels = {
+      characters: 'Characters & relationships',
+      plot:       'Key plot events',
+      themes:     'Themes & tone',
+      vo:         'VO content summary',
+    };
+    const selectedOptions = [...document.querySelectorAll('#enSummaryOptions .pill.active')]
+      .map(p => optionLabels[p.dataset.opt]).join(', ') || 'general overview';
+    const langInstruction = enSelectedLang === 'zh'
+      ? 'Respond entirely in Simplified Chinese (简体中文).'
+      : 'Respond entirely in English.';
+    const digest = enLines
+      .map(l => `[${l.voId}] ${l.character}: ${l.latestEN || l.englishScript}`)
+      .join('\n');
     const systemPrompt = `You are a game localization producer reviewing English VO scripts.
-Summarize the key content, character voices, tone, and any localization concerns in ~200 words.
-Be practical and production-focused.`;
+Summarize the key content in approximately ${length} words.
+Focus on: ${selectedOptions}.
+${langInstruction}
+Be practical and production-focused. No preamble.`;
 
     const text = await callClaude(systemPrompt, digest);
+    const ta = document.getElementById('enSummaryText');
+    ta.value = text;
+    ta.style.display = '';
+    document.getElementById('enReviewContent').style.display = 'none';
     document.getElementById('enOutputLabel').textContent = 'EN Summary';
-    document.getElementById('enReviewContent').innerHTML = `<pre style="white-space:pre-wrap;font-size:12px">${escapeHtml(text)}</pre>`;
     document.getElementById('enReviewOutput').style.display = 'block';
+    document.getElementById('saveEnToArchive').style.display = '';
+    autoResize(ta);
   } catch (err) {
     setError('enReviewError', err.message);
   } finally {
     setBusy(btn, false);
   }
+});
+
+document.getElementById('saveEnToArchive').addEventListener('click', () => {
+  saveToArchive('EN', `${enFileName} — EN Summary`, document.getElementById('enSummaryText').value);
 });
 
 /* ── EN Table ───────────────────────────────────────────────── */
@@ -781,6 +925,9 @@ document.getElementById('generateEnTable').addEventListener('click', async () =>
   setBusy(btn, true);
 
   try {
+    document.getElementById('enSummaryText').style.display = 'none';
+    document.getElementById('enReviewContent').style.display = '';
+    document.getElementById('saveEnToArchive').style.display = 'none';
     document.getElementById('enOutputLabel').textContent = 'EN Table';
     const outputArea = document.getElementById('enReviewOutput');
     outputArea.style.display = 'block';
@@ -851,6 +998,9 @@ document.getElementById('generateReview').addEventListener('click', async () => 
   setBusy(btn, true);
 
   try {
+    document.getElementById('enSummaryText').style.display = 'none';
+    document.getElementById('enReviewContent').style.display = '';
+    document.getElementById('saveEnToArchive').style.display = 'none';
     // Build a side-by-side sample
     const sample = enLines.slice(0, 80).map(l =>
       `[${l.voId}]\nCN: ${l.chineseScript}\nEN: ${l.latestEN || l.englishScript}\nNotes: ${l.performanceNotes || '—'}`
@@ -877,7 +1027,10 @@ Format with ## headers and be specific. Reference VO IDs where relevant.`;
 });
 
 document.getElementById('copyEnReview').addEventListener('click', () => {
-  const text = document.getElementById('enReviewContent').innerText;
+  const ta = document.getElementById('enSummaryText');
+  const text = ta.style.display !== 'none'
+    ? ta.value
+    : document.getElementById('enReviewContent').innerText;
   navigator.clipboard.writeText(text).then(() => {
     const btn = document.getElementById('copyEnReview');
     btn.textContent = 'Copied!';

@@ -51,7 +51,8 @@
       <button class="tab active" data-tab="general">General</button>
       <button class="tab" data-tab="structured">Structured</button>
       <button class="tab" data-tab="glossary">Glossary</button>
-      <button class="tab" data-tab="en-review">EN Review</button>
+      <button class="tab" data-tab="en-review">EN Summary</button>
+      <button class="tab" data-tab="archive">Archive</button>
     </div>
 
     <!-- TAB: GENERAL -->
@@ -85,6 +86,7 @@
         <div class="output-header">
           <span class="output-label">Summary</span>
           <button id="copyGeneral" class="btn-copy">Copy</button>
+          <button id="saveGeneralToArchive" class="btn-copy" style="display:none">Save</button>
         </div>
         <textarea id="generalText" class="output-text" readonly></textarea>
       </div>
@@ -92,6 +94,15 @@
 
     <!-- TAB: STRUCTURED -->
     <div id="tab-structured" class="tab-content">
+      <div class="pill-row" id="structuredColSelector">
+  <span class="ctrl-label" style="align-self:center">Cols</span>
+  <button class="col-pill pill active" data-col="0">PerformID</button>
+  <button class="col-pill pill active" data-col="1">类型</button>
+  <button class="col-pill pill active" data-col="2">场景描述</button>
+  <button class="col-pill pill active" data-col="3">台词</button>
+  <button class="col-pill pill active" data-col="4">VO</button>
+  <button class="col-pill pill active" data-col="5">故事总结</button>
+</div>
       <div class="action-row">
         <button id="generateStructured" class="btn-gold">Generate Table</button>
       </div>
@@ -103,6 +114,7 @@
             <button id="exportCsv" class="btn-copy">CSV</button>
             <button id="exportTsv" class="btn-copy">TSV</button>
           </div>
+          <button id="saveStructuredToArchive" class="btn-copy" style="display:none">Save</button>
         </div>
         <div id="structuredTable" class="table-scroll"></div>
       </div>
@@ -125,6 +137,7 @@
       <div id="glossaryOutput" class="output-area" style="display:none">
         <div class="output-header">
           <span class="output-label">Glossary Preview (first 12)</span>
+          <button id="saveGlossaryToArchive" class="btn-copy" style="display:none">Save</button>
         </div>
         <div id="glossaryTable" class="table-scroll"></div>
         <div id="glossarySummary" class="glossary-summary"></div>
@@ -141,8 +154,29 @@
         </div>
       </div>
       <div id="enMeta" class="meta-chips" style="display:none"></div>
+      <div class="controls-row">
+  <label class="ctrl-label">Length</label>
+  <select id="enSummaryLength" class="ctrl-select">
+    <option value="100">~100 words</option>
+    <option value="200" selected>~200 words</option>
+    <option value="300">~300 words</option>
+    <option value="500">~500 words</option>
+    <option value="800">~800 words</option>
+  </select>
+  <label class="ctrl-label">Language</label>
+  <div class="lang-toggle" id="enLangToggle">
+    <button class="lang-btn" data-lang="zh">中文</button>
+    <button class="lang-btn active" data-lang="en">English</button>
+  </div>
+</div>
+<div class="pill-row" id="enSummaryOptions">
+  <button class="pill active" data-opt="characters">Characters &amp; relationships</button>
+  <button class="pill active" data-opt="plot">Key plot events</button>
+  <button class="pill" data-opt="themes">Themes &amp; tone</button>
+  <button class="pill active" data-opt="vo">VO content summary</button>
+</div>
       <div class="action-row action-row-multi">
-        <button id="generateEnSummary" class="btn-gold btn-sm-text">EN Summary</button>
+        <button id="generateEnSummary" class="btn-gold btn-sm-text">Generate Summary</button>
         <button id="generateEnTable" class="btn-gold btn-sm-text">EN Table</button>
         <button id="generateReview" class="btn-teal btn-sm-text">Review</button>
       </div>
@@ -151,9 +185,17 @@
         <div class="output-header">
           <span class="output-label" id="enOutputLabel">Output</span>
           <button id="copyEnReview" class="btn-copy">Copy</button>
+          <button id="saveEnToArchive" class="btn-copy" style="display:none">Save</button>
         </div>
-        <div id="enReviewContent" class="output-review"></div>
+        <textarea id="enSummaryText" class="output-text output-text-en" readonly style="display:none"></textarea>
+        <div id="enReviewContent" class="output-review" style="display:none"></div>
       </div>
+    </div>
+
+    <!-- TAB: ARCHIVE -->
+    <div id="tab-archive" class="tab-content">
+      <div id="archiveEmpty" class="archive-empty">No saved summaries yet.</div>
+      <div id="archiveList"></div>
     </div>
 
   </div><!-- /mainBody -->
