@@ -589,23 +589,38 @@ document.getElementById('generateGeneral').addEventListener('click', async () =>
     let digest, systemPrompt;
     if (usingEN) {
       digest = enLines.map(l => `[${l.voId}] ${l.character}: ${l.latestEN || l.englishScript}`).join('\n');
-      systemPrompt = `You are a professional game localization producer reviewing English VO scripts.
-Summarize the key content in approximately ${length} words.
-Focus on: ${selectedOptions}.
-Respond entirely in English.
-Be concise and useful for a production team. No preamble.`;
+      systemPrompt = `You are a senior game localization producer and expert script analyst specializing in English voice-over production. Your task is to write a concise, production-ready script analysis brief for professional voice actors and directors preparing for a recording session.
+
+Analyze the provided VO script digest and summarize the key content in approximately ${length} words.
+
+Focus exclusively on: ${selectedOptions}.
+
+Output requirements:
+- Write entirely in English
+- Use clear section headers for each focus area
+- Be specific and actionable — avoid vague or generic observations
+- No preamble, no meta-commentary`;
     } else {
       digest = buildScriptDigest(cnScenes);
-      systemPrompt = `You are a professional game localization producer.
-Summarize the provided VO script digest in approximately ${length} words.
-Focus on: ${selectedOptions}.
-Respond entirely in Simplified Chinese (简体中文).
-Be concise and useful for a production team. No preamble.`;
+      systemPrompt = `You are a senior game localization producer and expert script analyst specializing in English voice-over production. Your task is to write a comprehensive script analysis brief for professional voice actors and directors preparing for a recording session.
+
+Analyze the provided VO script digest and produce a structured report of approximately ${length} words.
+
+Focus exclusively on: ${selectedOptions}.
+
+Output requirements:
+- Write entirely in Simplified Chinese (简体中文)
+- Use clear section headers for each focus area
+- Be specific, actionable, and production-ready — avoid vague observations
+- No preamble, no meta-commentary
+
+The analysis should help a recording team immediately understand performance expectations, character nuances, and any technical or narrative considerations relevant to the session.`;
     }
 
     const text = await callClaude(systemPrompt, digest);
     const ta = document.getElementById('generalText');
     ta.value = text;
+    document.getElementById('generalOutputLabel').textContent = 'Summary';
     document.getElementById('generalOutput').style.display = 'block';
     requestAnimationFrame(() => autoResize(ta));
     document.getElementById('saveGeneralToArchive').style.display = '';
@@ -619,7 +634,8 @@ Be concise and useful for a production team. No preamble.`;
 document.getElementById('saveGeneralToArchive').addEventListener('click', () => {
   const src   = selectedLang === 'en' ? 'EN' : 'CN';
   const fname = selectedLang === 'en' ? enFileName : cnFileName;
-  saveToArchive(src, `${fname} — Summary`, document.getElementById('generalText').value);
+  const kind  = document.getElementById('generalOutputLabel').textContent || 'Summary';
+  saveToArchive(src, `${fname} — ${kind}`, document.getElementById('generalText').value);
 });
 
 document.getElementById('copyGeneral').addEventListener('click', () => {
@@ -629,6 +645,121 @@ document.getElementById('copyGeneral').addEventListener('click', () => {
     btn.textContent = 'Copied!';
     setTimeout(() => { btn.textContent = 'Copy'; }, 1500);
   });
+});
+
+/* ── Comprehensive Analysis (two-stage map-reduce) ──────────── */
+
+// Split a long digest into segments of roughly maxChars, breaking on
+// scene boundaries (=== markers) where possible, otherwise on newlines.
+function splitIntoSegments(digestText, maxChars = 6000) {
+  const blocks = digestText.includes('=== ')
+    ? digestText.split(/\n\n(?==== )/)
+    : digestText.split('\n');
+  const segments = [];
+  let current = '';
+  for (const block of blocks) {
+    if (current && current.length + block.length > maxChars) {
+      segments.push(current);
+      current = block;
+    } else {
+      current = current ? current + '\n\n' + block : block;
+    }
+  }
+  if (current) segments.push(current);
+  return segments;
+}
+
+document.getElementById('generateComprehensive').addEventListener('click', async () => {
+  const usingEN = selectedLang === 'en';
+  if (!usingEN && !cnScenes.length) { setError('generalError', 'Please upload a CN script first.'); return; }
+  if (usingEN && !enLines.length)   { setError('generalError', 'Please upload an EN VO tracker first.'); return; }
+  setError('generalError', '');
+
+  const btn      = document.getElementById('generateComprehensive');
+  const progress = document.getElementById('comprehensiveProgress');
+  setBusy(btn, true);
+
+  try {
+    const digest = usingEN
+      ? enLines.map(l => `[${l.voId}] ${l.character}: ${l.latestEN || l.englishScript}`).join('\n')
+      : buildScriptDigest(cnScenes);
+
+    // Stage 1: summarize each segment
+    const segments = splitIntoSegments(digest);
+    const segPrompt = usingEN
+      ? 'You are a script analyst. Summarize this voice-over script segment in 100-150 English words, covering plot events, characters, emotional beats, and tone. Return ONLY the summary.'
+      : '你是一名剧本分析师。请用100-150个中文字总结这段配音剧本片段，涵盖剧情事件、角色、情感节奏与基调。只输出总结内容。';
+
+    const segSummaries = [];
+    progress.style.display = 'block';
+    for (let i = 0; i < segments.length; i++) {
+      progress.textContent = `Analyzing segment ${i + 1}/${segments.length}…`;
+      segSummaries.push(await callClaude(segPrompt, segments[i]));
+    }
+
+    // Stage 2: comprehensive analysis from segment summaries
+    progress.textContent = 'Writing comprehensive analysis…';
+    const langLine = usingEN
+      ? '- Output in English to match the segment summaries'
+      : '- Output in Chinese to match the segment summaries';
+    const storyPrompt = `You are a master script analyst creating a comprehensive, in-depth analysis of a voice-over script for professional actors, directors, and literature scholars.
+
+Create a detailed analytical summary from these segment summaries that thoroughly examines:
+
+1. Narrative Structure and Plot Progression:
+   - Analyze the complete narrative arc with all key plot points
+   - Identify inciting incidents, rising action, climax, falling action, and resolution
+   - Map the causal relationships between events
+   - Examine narrative techniques (flashbacks, foreshadowing, parallel storylines)
+
+2. Thematic Analysis:
+   - Identify and explore all major and minor themes
+   - Analyze how themes develop, intersect, and evolve
+   - Examine philosophical questions or moral dilemmas posed
+   - Connect themes to broader cultural, historical, or existential contexts
+
+3. Character Development and Psychology:
+   - Analyze the psychological complexity of major characters
+   - Map character arcs, transformations, and internal conflicts
+   - Examine relationship dynamics and interpersonal tensions
+   - Identify character motivations, desires, fears, and contradictions
+
+4. Setting, Atmosphere, and Symbolic Elements:
+   - Analyze the worldbuilding and environmental elements
+   - Examine how setting influences character and plot
+   - Identify symbolic imagery, motifs, and recurring patterns
+   - Explore atmospheric elements that create emotional resonance
+
+5. Narrative Voice and Stylistic Approach:
+   - Analyze the narrative perspective and tonal qualities
+   - Identify distinctive stylistic features or linguistic patterns
+   - Examine dialogue characteristics and communication styles
+   - Discuss artistic influences or genre conventions
+
+IMPORTANT:
+${langLine}
+- Provide a comprehensive, richly detailed analysis (maximum 1500-2000 characters)
+- Include nuanced interpretations that go beyond surface-level observations
+- Ensure all your sentences are complete with proper conclusions
+- Structure your analysis with clear sections and logical progression`;
+
+    const segmentInput = segSummaries
+      .map((s, i) => `[Segment ${i + 1}]\n${s.trim()}`)
+      .join('\n\n');
+    const text = await callClaude(storyPrompt, segmentInput);
+
+    const ta = document.getElementById('generalText');
+    ta.value = text;
+    document.getElementById('generalOutputLabel').textContent = 'Comprehensive Analysis';
+    document.getElementById('generalOutput').style.display = 'block';
+    requestAnimationFrame(() => autoResize(ta));
+    document.getElementById('saveGeneralToArchive').style.display = '';
+  } catch (err) {
+    setError('generalError', err.message);
+  } finally {
+    progress.style.display = 'none';
+    setBusy(btn, false);
+  }
 });
 
 /* ================================================================

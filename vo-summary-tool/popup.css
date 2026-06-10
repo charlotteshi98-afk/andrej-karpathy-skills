@@ -382,6 +382,14 @@ button { cursor: pointer; font-family: 'Noto Sans SC', sans-serif; }
 }
 .action-row-multi { flex-wrap: wrap; }
 
+/* ─── Progress note ──────────────────────────────────────────────────────── */
+.progress-note {
+  font-family: 'Space Mono', monospace;
+  font-size: 10px;
+  color: var(--accent2);
+  margin-bottom: 10px;
+}
+
 /* ─── Error ──────────────────────────────────────────────────────────────── */
 .error-msg {
   background: rgba(220,38,38,0.07);

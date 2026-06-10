@@ -48,7 +48,7 @@
 
     <!-- TABS -->
     <div class="tabs">
-      <button class="tab active" data-tab="general">General</button>
+      <button class="tab active" data-tab="general">Summary</button>
       <button class="tab" data-tab="structured">Structured</button>
       <button class="tab" data-tab="glossary">Glossary</button>
       <button class="tab" data-tab="archive">Archive</button>
@@ -88,12 +88,14 @@
         <button class="pill" data-opt="vo">VO content summary</button>
       </div>
       <div class="action-row">
-        <button id="generateGeneral" class="btn-gold">Generate Summary</button>
+        <button id="generateGeneral" class="btn-gold" title="Quick production brief at the selected length">Generate Summary</button>
+        <button id="generateComprehensive" class="btn-teal" title="In-depth analysis: narrative, themes, characters, setting, style. Slower — analyzes the script in segments first.">Comprehensive Analysis</button>
       </div>
+      <div id="comprehensiveProgress" class="progress-note" style="display:none"></div>
       <div id="generalError" class="error-msg" style="display:none"></div>
       <div id="generalOutput" class="output-area" style="display:none">
         <div class="output-header">
-          <span class="output-label">Summary</span>
+          <span class="output-label" id="generalOutputLabel">Summary</span>
           <button id="copyGeneral" class="btn-copy">Copy</button>
           <button id="saveGeneralToArchive" class="btn-copy" style="display:none">Save</button>
         </div>
