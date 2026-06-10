@@ -264,9 +264,48 @@ function renderENMeta() {
   el.style.display = 'flex';
   el.innerHTML = `
     <span class="meta-chip gold">${enLines.length} VO lines</span>
-    <span class="meta-chip">${enFileName}</span>
+    <span class="meta-chip">${escapeHtml(enFileName)}</span>
   `;
 }
+
+/* ── Scan EN tracker from the Google Sheet in the current tab ── */
+document.getElementById('scanSheetBtn').addEventListener('click', async () => {
+  setError('generalError', '');
+  const btn = document.getElementById('scanSheetBtn');
+  setBusy(btn, true);
+  try {
+    const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+    const idMatch = tab && tab.url
+      ? tab.url.match(/docs\.google\.com\/spreadsheets\/d\/([a-zA-Z0-9_-]+)/)
+      : null;
+    if (!idMatch) {
+      throw new Error('The current tab is not a Google Sheet. Open the EN tracker sheet in the active tab, then click Scan again.');
+    }
+    const sheetId  = idMatch[1];
+    const gidMatch = tab.url.match(/[#?&]gid=(\d+)/);
+    const gid      = gidMatch ? gidMatch[1] : '0';
+
+    // CSV export honors gid, so only the visible sheet tab is fetched
+    const resp = await fetch(
+      `https://docs.google.com/spreadsheets/d/${sheetId}/export?format=csv&gid=${gid}`,
+      { credentials: 'include' }
+    );
+    if (!resp.ok) {
+      throw new Error(`Could not read the sheet (HTTP ${resp.status}). Make sure you are signed in to Google and have access to this sheet.`);
+    }
+    const csvText = await resp.text();
+    enLines = parseENTracker(new TextEncoder().encode(csvText).buffer);
+    if (!enLines.length) {
+      throw new Error('No VO lines found on this sheet tab. Check that the visible tab contains the EN tracker with a "VO ID" column.');
+    }
+    enFileName = (tab.title || 'Google Sheet').replace(/ - Google (Sheets|表格)$/, '');
+    renderENMeta();
+  } catch (err) {
+    setError('generalError', err.message);
+  } finally {
+    setBusy(btn, false);
+  }
+});
 
 /* ================================================================
    TERM BASE UPLOAD

@@ -3,8 +3,8 @@
   "name": "VO Script Summary Tool",
   "version": "1.0.0",
   "description": "Game localization VO script analyzer for production teams",
-  "permissions": ["storage", "sidePanel"],
-  "host_permissions": ["https://api.anthropic.com/*"],
+  "permissions": ["storage", "sidePanel", "tabs"],
+  "host_permissions": ["https://api.anthropic.com/*", "https://docs.google.com/*"],
   "background": {
     "service_worker": "background.js"
   },
