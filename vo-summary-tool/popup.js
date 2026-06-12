@@ -303,16 +303,22 @@ document.getElementById('scanSheetBtn').addEventListener('click', async () => {
     const gidMatch = tab.url.match(/[#?&]gid=(\d+)/);
     const gid      = gidMatch ? gidMatch[1] : '0';
 
-    // CSV export honors gid, so only the visible sheet tab is fetched
-    const resp = await fetch(
-      `https://docs.google.com/spreadsheets/d/${sheetId}/export?format=csv&gid=${gid}`,
-      { credentials: 'include' }
-    );
-    if (!resp.ok) {
-      throw new Error(`Could not read the sheet (HTTP ${resp.status}). Make sure you are signed in to Google and have access to this sheet.`);
+    // CSV export honors gid, so only the visible sheet tab is fetched.
+    // Fetched via the background worker — direct fetch from the panel is blocked by CORS.
+    const result = await chrome.runtime.sendMessage({
+      type: 'fetchSheetCsv',
+      url: `https://docs.google.com/spreadsheets/d/${sheetId}/export?format=csv&gid=${gid}`,
+    });
+    if (!result || !result.ok) {
+      if (result && (result.status === 401 || result.status === 403)) {
+        throw new Error('Google denied access to this sheet. Fix: make sure you are signed in to Google in this browser profile and your account can open the sheet, then try again.');
+      }
+      if (result && result.status === 404) {
+        throw new Error('Sheet not found (HTTP 404). Fix: check that the sheet still exists and the URL in the current tab is correct.');
+      }
+      throw new Error(`Could not read the sheet${result && result.status ? ` (HTTP ${result.status})` : ''}${result && result.error ? `: ${result.error}` : ''}. Fix: reload the extension at chrome://extensions, reload the sheet tab, then try again.`);
     }
-    const csvText = await resp.text();
-    enLines = parseENTracker(new TextEncoder().encode(csvText).buffer);
+    enLines = parseENTracker(new TextEncoder().encode(result.text).buffer);
     if (!enLines.length) {
       throw new Error('No VO lines found on this sheet tab. Check that the visible tab contains the EN tracker with a "VO ID" column.');
     }
@@ -584,11 +590,30 @@ async function callClaude(systemPrompt, userPrompt) {
 
   if (!response.ok) {
     const err = await response.json().catch(() => ({}));
-    throw new Error(err.error?.message || `API error ${response.status}`);
+    const detail = err.error?.message || '';
+    if (response.status === 401) {
+      throw new Error('API key rejected (401). Fix: re-enter a valid Anthropic API key in the bar above and click Save.');
+    }
+    if (response.status === 429) {
+      throw new Error('Rate limit reached (429). Fix: wait about a minute, then try again. For large scripts, generate one feature at a time.');
+    }
+    if (response.status === 529 || response.status === 503) {
+      throw new Error('Claude API is overloaded right now. Fix: wait a moment and try again.');
+    }
+    throw new Error(`Claude API error ${response.status}${detail ? `: ${detail}` : ''}. Fix: try again; if it persists, check your API key and network.`);
   }
 
   const data = await response.json();
   return data.content[0].text;
+}
+
+/* Strip markdown decoration (asterisks, pound headers) the model may emit */
+function stripMarkdown(text) {
+  return text
+    .replace(/^#{1,6}\s*/gm, '')
+    .replace(/\*\*([^*]+)\*\*/g, '$1')
+    .replace(/\*([^*\n]+)\*/g, '$1')
+    .replace(/^\s*[-*]\s+/gm, '· ');
 }
 
 /* ── Type badge helper ──────────────────────────────────────── */
@@ -624,8 +649,14 @@ function parsePipeRow(line) {
    ================================================================ */
 document.getElementById('generateGeneral').addEventListener('click', async () => {
   const usingEN = selectedLang === 'en';
-  if (!usingEN && !cnScenes.length) { setError('generalError', 'Please upload a CN script first.'); return; }
-  if (usingEN && !enLines.length)   { setError('generalError', 'Please upload an EN VO tracker first.'); return; }
+  // English without a tracker falls back to translating from the CN script
+  const enFromCN = usingEN && !enLines.length;
+  if ((!usingEN || enFromCN) && !cnScenes.length) {
+    setError('generalError', usingEN
+      ? 'No EN tracker loaded and no CN script uploaded. Fix: scan/upload the EN tracker, or upload the CN script so the summary can be translated from it.'
+      : 'Please upload a CN script first.');
+    return;
+  }
   setError('generalError', '');
 
   const btn = document.getElementById('generateGeneral');
@@ -646,8 +677,13 @@ document.getElementById('generateGeneral').addEventListener('click', async () =>
     };
     const selectedOptions = activePills.map(k => optionLabels[k]).join(', ') || 'general overview';
 
+    const styleRules = `- Plain text only: no markdown, no asterisks, no pound signs. Mark section headers with a line like 【Section Name】
+- Write in natural, flowing prose — full sentences and short paragraphs, not fragmented bullet lists
+- Be specific and actionable — avoid vague or generic observations
+- No preamble, no meta-commentary`;
+
     let digest, systemPrompt;
-    if (usingEN) {
+    if (usingEN && !enFromCN) {
       digest = enLines.map(l => `[${l.voId}] ${l.character}: ${l.latestEN || l.englishScript}`).join('\n');
       systemPrompt = `You are a senior game localization producer and expert script analyst specializing in English voice-over production. Your task is to write a concise, production-ready script analysis brief for professional voice actors and directors preparing for a recording session.
 
@@ -657,15 +693,24 @@ Focus exclusively on: ${selectedOptions}.
 
 Output requirements:
 - Write entirely in English
-- Use clear section headers for each focus area
-- Be specific and actionable — avoid vague or generic observations
-- No preamble, no meta-commentary`;
-    } else {
+${styleRules}`;
+    } else if (enFromCN) {
       digest = buildScriptDigest(cnScenes);
       const glossaryRef = termBaseMap.size > 0
-        ? '\n\nReference glossary (use these established translations for character names and key terms):\n' +
-          [...termBaseMap.entries()].map(([cn, en]) => `${cn} → ${en}`).join('\n')
-        : '';
+        ? `\n\nReference glossary — always use these established English translations:\n${[...termBaseMap.entries()].map(([cn, en]) => `${cn} → ${en}`).join('\n')}`
+        : '\n\nNote: no reference glossary is loaded, so name and term translations are provisional and may need unification later.';
+      systemPrompt = `You are a senior game localization producer and expert script analyst specializing in English voice-over production. The source script is in Chinese; no English translation exists yet. Write the analysis brief in English, translating names and terms as you go.
+
+Analyze the provided VO script digest and summarize the key content in approximately ${length} words.
+
+Focus exclusively on: ${selectedOptions}.
+
+Output requirements:
+- Write entirely in English
+${styleRules}
+- After the brief, add a final section 【Terms needing unified translation】 listing every character name or key term that is NOT covered by the reference glossary, one per line as: CN term — provisional English translation used. If everything is covered, write "None".${glossaryRef}`;
+    } else {
+      digest = buildScriptDigest(cnScenes);
       systemPrompt = `You are a senior game localization producer and expert script analyst specializing in English voice-over production. Your task is to write a comprehensive script analysis brief for professional voice actors and directors preparing for a recording session.
 
 Analyze the provided VO script digest and produce a structured report of approximately ${length} words.
@@ -674,14 +719,12 @@ Focus exclusively on: ${selectedOptions}.
 
 Output requirements:
 - Write entirely in Simplified Chinese (简体中文)
-- Use clear section headers for each focus area
-- Be specific, actionable, and production-ready — avoid vague observations
-- No preamble, no meta-commentary
+${styleRules}
 
-The analysis should help a recording team immediately understand performance expectations, character nuances, and any technical or narrative considerations relevant to the session.${glossaryRef}`;
+The analysis should help a recording team immediately understand performance expectations, character nuances, and any technical or narrative considerations relevant to the session.`;
     }
 
-    const text = await callClaude(systemPrompt, digest);
+    const text = stripMarkdown(await callClaude(systemPrompt, digest));
     const ta = document.getElementById('generalText');
     ta.value = text;
     document.getElementById('generalOutputLabel').textContent = 'Summary';
@@ -736,8 +779,14 @@ function splitIntoSegments(digestText, maxChars = 6000) {
 
 document.getElementById('generateComprehensive').addEventListener('click', async () => {
   const usingEN = selectedLang === 'en';
-  if (!usingEN && !cnScenes.length) { setError('generalError', 'Please upload a CN script first.'); return; }
-  if (usingEN && !enLines.length)   { setError('generalError', 'Please upload an EN VO tracker first.'); return; }
+  // English without a tracker falls back to translating from the CN script
+  const enFromCN = usingEN && !enLines.length;
+  if ((!usingEN || enFromCN) && !cnScenes.length) {
+    setError('generalError', usingEN
+      ? 'No EN tracker loaded and no CN script uploaded. Fix: scan/upload the EN tracker, or upload the CN script so the analysis can be translated from it.'
+      : 'Please upload a CN script first.');
+    return;
+  }
   setError('generalError', '');
 
   const btn      = document.getElementById('generateComprehensive');
@@ -745,15 +794,19 @@ document.getElementById('generateComprehensive').addEventListener('click', async
   setBusy(btn, true);
 
   try {
-    const digest = usingEN
+    const digest = (usingEN && !enFromCN)
       ? enLines.map(l => `[${l.voId}] ${l.character}: ${l.latestEN || l.englishScript}`).join('\n')
       : buildScriptDigest(cnScenes);
+
+    const glossaryRef = enFromCN && termBaseMap.size > 0
+      ? `\n\nReference glossary — always use these established English translations:\n${[...termBaseMap.entries()].map(([cn, en]) => `${cn} → ${en}`).join('\n')}`
+      : '';
 
     // Stage 1: summarize each segment
     const segments = splitIntoSegments(digest);
     const segPrompt = usingEN
-      ? 'You are a script analyst. Summarize this voice-over script segment in 100-150 English words, covering plot events, characters, emotional beats, and tone. Return ONLY the summary.'
-      : '你是一名剧本分析师。请用100-150个中文字总结这段配音剧本片段，涵盖剧情事件、角色、情感节奏与基调。只输出总结内容。';
+      ? `You are a script analyst. Summarize this voice-over script segment in 100-150 English words, covering plot events, characters, emotional beats, and tone. Write in plain prose with no markdown formatting. Return ONLY the summary.${enFromCN ? ' The segment is in Chinese; write the summary in English.' + glossaryRef : ''}`
+      : '你是一名剧本分析师。请用100-150个中文字总结这段配音剧本片段，涵盖剧情事件、角色、情感节奏与基调。使用自然流畅的纯文本，不要使用任何markdown符号。只输出总结内容。';
 
     const segSummaries = [];
     progress.style.display = 'block';
@@ -806,12 +859,14 @@ ${langLine}
 - Provide a comprehensive, richly detailed analysis (maximum 1500-2000 characters)
 - Include nuanced interpretations that go beyond surface-level observations
 - Ensure all your sentences are complete with proper conclusions
-- Structure your analysis with clear sections and logical progression`;
+- Structure your analysis with clear sections and logical progression
+- Plain text only: no markdown, no asterisks, no pound signs. Mark section headers with a line like 【Section Name】
+- Write in natural, flowing prose — full sentences and readable paragraphs, not fragmented bullet lists${glossaryRef}`;
 
     const segmentInput = segSummaries
       .map((s, i) => `[Segment ${i + 1}]\n${s.trim()}`)
       .join('\n\n');
-    const text = await callClaude(storyPrompt, segmentInput);
+    const text = stripMarkdown(await callClaude(storyPrompt, segmentInput));
 
     const ta = document.getElementById('generalText');
     ta.value = text;
@@ -888,6 +943,7 @@ Output ONLY the data lines, no headers, no extra text.`;
     tableDiv.innerHTML = renderStructuredTable(structuredRows);
 
     // Pass 2: story summary for all scenes
+    let consecutiveFailures = 0;
     for (let si = 0; si < cnScenes.length; si++) {
       const scene = cnScenes[si];
       structProgress.textContent = `Summarizing scene ${si + 1}/${cnScenes.length}…`;
@@ -900,11 +956,27 @@ Output ONLY the data lines, no headers, no extra text.`;
       const sysP2 = `Summarize this scene in ≤30 Chinese characters for a localization team. Focus on key emotional beats and story developments. Return ONLY the summary, no extra text.`;
 
       try {
-        const summary = await callClaude(sysP2, sceneDigest);
+        let summary;
+        try {
+          summary = await callClaude(sysP2, sceneDigest);
+        } catch (e1) {
+          // One retry after a pause — per-scene calls often trip the rate limit
+          if (!/429|Rate limit|overloaded/i.test(e1.message)) throw e1;
+          structProgress.textContent = `Rate limited — pausing 30s, then retrying scene ${si + 1}/${cnScenes.length}…`;
+          await new Promise(r => setTimeout(r, 30000));
+          structProgress.textContent = `Summarizing scene ${si + 1}/${cnScenes.length}…`;
+          summary = await callClaude(sysP2, sceneDigest);
+        }
+        consecutiveFailures = 0;
         const label = voCount === 0 ? '【无配音场景】' : '';
         if (idx !== -1) structuredRows[idx].storySummary = label + summary.trim();
-      } catch (_e) {
-        if (idx !== -1) structuredRows[idx].storySummary = '(error)';
+      } catch (e) {
+        consecutiveFailures++;
+        if (idx !== -1) structuredRows[idx].storySummary = '⚠ ' + e.message;
+        if (consecutiveFailures >= 3) {
+          tableDiv.innerHTML = renderStructuredTable(structuredRows);
+          throw new Error(`Stopped after 3 consecutive failed scenes. Last error: ${e.message}`);
+        }
       }
 
       // Re-render progressively
