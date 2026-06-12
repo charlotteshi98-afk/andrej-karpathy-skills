@@ -91,9 +91,16 @@
         <button class="pill" data-opt="vo">VO content summary</button>
       </div>
       <div class="action-row">
-        <button id="generateGeneral" class="btn-gold" title="Quick production brief at the selected length">Generate Summary</button>
-        <button id="generateComprehensive" class="btn-teal" title="In-depth analysis: narrative, themes, characters, setting, style. Slower — analyzes the script in segments first.">Comprehensive Analysis</button>
+        <span class="has-tooltip">
+          <button id="generateGeneral" class="btn-gold">Generate Summary</button>
+          <span class="tooltip-popup">Quick production brief — outputs at the selected word length.</span>
+        </span>
+        <span class="has-tooltip">
+          <button id="generateComprehensive" class="btn-teal">Comprehensive Analysis</button>
+          <span class="tooltip-popup">In-depth analysis of narrative, themes, characters &amp; style. Slower — the script is analyzed in segments first.</span>
+        </span>
       </div>
+      <div id="generalProgress" class="progress-note" style="display:none"></div>
       <div id="comprehensiveProgress" class="progress-note" style="display:none"></div>
       <div id="generalError" class="error-msg" style="display:none"></div>
       <div id="generalOutput" class="output-area" style="display:none">
@@ -120,6 +127,7 @@
       <div class="action-row">
         <button id="generateStructured" class="btn-gold">Generate Table</button>
       </div>
+      <div id="structuredProgress" class="progress-note" style="display:none"></div>
       <div id="structuredError" class="error-msg" style="display:none"></div>
       <div id="structuredOutput" class="output-area" style="display:none">
         <div class="output-header">
@@ -147,6 +155,7 @@
       <div class="action-row">
         <button id="generateGlossary" class="btn-gold">Extract Terms</button>
       </div>
+      <div id="glossaryProgress" class="progress-note" style="display:none"></div>
       <div id="glossaryError" class="error-msg" style="display:none"></div>
       <div id="glossaryOutput" class="output-area" style="display:none">
         <div class="output-header">

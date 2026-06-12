@@ -10,7 +10,7 @@ let cnFileName = '';
 let enLines    = [];
 let enFileName = '';
 let isCollapsed = false;
-let termBaseCN = new Set();
+let termBaseMap = new Map(); // CN term → EN term
 
 /* ── Structured table data store ────────────────────────────── */
 let structuredRows = [];  // [{performId, type, description, lineCount, voCount, storySummary}]
@@ -331,17 +331,17 @@ function handleTBFile(file) {
       const wb = XLSX.read(e.target.result, { type: 'array' });
       const ws = wb.Sheets[wb.SheetNames[0]];
       const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
-      termBaseCN = new Set(
+      termBaseMap = new Map(
         rows.slice(1)  // skip header row
-          .map(r => String(r[0] || '').trim())
-          .filter(Boolean)
+          .map(r => [String(r[0] || '').trim(), String(r[1] || '').trim()])
+          .filter(([cn]) => cn)
       );
       tbZone.classList.add('has-file');
       tbZone.querySelector('.upload-label').textContent = file.name;
       tbZone.querySelector('.upload-icon').textContent = '✓';
       const meta = document.getElementById('tbMeta');
       meta.style.display = 'flex';
-      meta.innerHTML = `<span class="meta-chip gold">${termBaseCN.size} terms loaded</span><span class="meta-chip">${file.name}</span>`;
+      meta.innerHTML = `<span class="meta-chip gold">${termBaseMap.size} terms loaded</span><span class="meta-chip">${file.name}</span>`;
     } catch (err) {
       setError('glossaryError', 'Term base parse error: ' + err.message);
     }
@@ -611,7 +611,10 @@ document.getElementById('generateGeneral').addEventListener('click', async () =>
   setError('generalError', '');
 
   const btn = document.getElementById('generateGeneral');
+  const genProgress = document.getElementById('generalProgress');
   setBusy(btn, true);
+  genProgress.textContent = 'Generating summary…';
+  genProgress.style.display = 'block';
 
   try {
     const length  = document.getElementById('summaryLength').value;
@@ -641,6 +644,10 @@ Output requirements:
 - No preamble, no meta-commentary`;
     } else {
       digest = buildScriptDigest(cnScenes);
+      const glossaryRef = termBaseMap.size > 0
+        ? '\n\nReference glossary (use these established translations for character names and key terms):\n' +
+          [...termBaseMap.entries()].map(([cn, en]) => `${cn} → ${en}`).join('\n')
+        : '';
       systemPrompt = `You are a senior game localization producer and expert script analyst specializing in English voice-over production. Your task is to write a comprehensive script analysis brief for professional voice actors and directors preparing for a recording session.
 
 Analyze the provided VO script digest and produce a structured report of approximately ${length} words.
@@ -653,7 +660,7 @@ Output requirements:
 - Be specific, actionable, and production-ready — avoid vague observations
 - No preamble, no meta-commentary
 
-The analysis should help a recording team immediately understand performance expectations, character nuances, and any technical or narrative considerations relevant to the session.`;
+The analysis should help a recording team immediately understand performance expectations, character nuances, and any technical or narrative considerations relevant to the session.${glossaryRef}`;
     }
 
     const text = await callClaude(systemPrompt, digest);
@@ -666,6 +673,7 @@ The analysis should help a recording team immediately understand performance exp
   } catch (err) {
     setError('generalError', err.message);
   } finally {
+    genProgress.style.display = 'none';
     setBusy(btn, false);
   }
 });
@@ -809,7 +817,10 @@ document.getElementById('generateStructured').addEventListener('click', async ()
   setError('structuredError', '');
 
   const btn = document.getElementById('generateStructured');
+  const structProgress = document.getElementById('structuredProgress');
   setBusy(btn, true);
+  structProgress.textContent = 'Analyzing scenes…';
+  structProgress.style.display = 'block';
 
   const outputArea = document.getElementById('structuredOutput');
   const tableDiv   = document.getElementById('structuredTable');
@@ -859,7 +870,9 @@ Output ONLY the data lines, no headers, no extra text.`;
     tableDiv.innerHTML = renderStructuredTable(structuredRows);
 
     // Pass 2: story summary for all scenes
-    for (const scene of cnScenes) {
+    for (let si = 0; si < cnScenes.length; si++) {
+      const scene = cnScenes[si];
+      structProgress.textContent = `Summarizing scene ${si + 1}/${cnScenes.length}…`;
       const voCount = scene.lines.filter(l => l.hasVO).length;
       const idx = structuredRows.findIndex(r => r.performId === scene.performId);
 
@@ -892,6 +905,7 @@ Output ONLY the data lines, no headers, no extra text.`;
   } catch (err) {
     setError('structuredError', err.message);
   } finally {
+    structProgress.style.display = 'none';
     setBusy(btn, false);
   }
 });
@@ -944,7 +958,10 @@ document.getElementById('generateGlossary').addEventListener('click', async () =
   setError('glossaryError', '');
 
   const btn = document.getElementById('generateGlossary');
+  const glsProgress = document.getElementById('glossaryProgress');
   setBusy(btn, true);
+  glsProgress.textContent = 'Extracting terms…';
+  glsProgress.style.display = 'block';
 
   try {
     const digest = buildScriptDigest(cnScenes);
@@ -956,16 +973,16 @@ CN Term|Category|Context|Option A|Reason A|Option B|Reason B|Option C|Reason C
 - Options: 3 English translation candidates with brief reasoning
 Output ONLY data lines, no header, no extra text. Extract 20-40 terms.`;
 
-    const tbList = termBaseCN.size > 0
-      ? `\n\nTerm base (already translated — skip these CN terms):\n${[...termBaseCN].join(', ')}`
+    const tbList = termBaseMap.size > 0
+      ? `\n\nTerm base (already translated — skip these CN terms):\n${[...termBaseMap.keys()].join(', ')}`
       : '';
     const raw  = await callClaude(systemPrompt, digest + tbList);
     const terms = raw.split('\n')
       .map(line => parsePipeRow(line))
       .filter(cols => cols.length >= 9 && cols[0]);
 
-    const filteredTerms = termBaseCN.size > 0
-      ? terms.filter(cols => !termBaseCN.has(cols[0].trim()))
+    const filteredTerms = termBaseMap.size > 0
+      ? terms.filter(cols => !termBaseMap.has(cols[0].trim()))
       : terms;
 
     // Sort by Category then CN Term
@@ -997,6 +1014,7 @@ Output ONLY data lines, no header, no extra text. Extract 20-40 terms.`;
   } catch (err) {
     setError('glossaryError', err.message);
   } finally {
+    glsProgress.style.display = 'none';
     setBusy(btn, false);
   }
 });
