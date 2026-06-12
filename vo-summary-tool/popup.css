@@ -60,15 +60,17 @@ html, body {
   gap: 10px;
 }
 
-.vo-badge {
-  background: var(--accent);
-  color: #ffffff;
-  font-family: 'Space Mono', monospace;
-  font-weight: 700;
-  font-size: 11px;
-  padding: 2px 7px;
-  border-radius: 3px;
-  letter-spacing: 0.5px;
+.interknot-badge {
+  height: 30px;
+  width: auto;
+  display: block;
+  flex-shrink: 0;
+}
+
+.header-title-group {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
 }
 
 .header-title {
@@ -77,7 +79,22 @@ html, body {
   font-weight: 600;
   color: var(--text);
   letter-spacing: 0.2px;
+  line-height: 1.2;
 }
+
+.header-sub {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.zzz-glyph {
+  color: var(--accent2);
+  opacity: 0.55;
+}
+
+.zzz-glyph:first-child { width: 18px; height: 13px; }
+.zzz-glyph:last-child  { width: 14px; height: 10px; }
 
 .collapse-btn {
   background: none;
