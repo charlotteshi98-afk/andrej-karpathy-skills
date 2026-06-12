@@ -9,10 +9,10 @@
     "service_worker": "background.js"
   },
   "action": {
-    "default_icon": { "48": "icon.png" }
+    "default_icon": { "48": "icon.png", "128": "icon.png" }
   },
   "side_panel": {
     "default_path": "popup.html"
   },
-  "icons": { "48": "icon.png" }
+  "icons": { "48": "icon.png", "128": "icon.png" }
 }

@@ -98,6 +98,24 @@ document.querySelectorAll('#summaryOptions .pill').forEach(pill => {
   pill.addEventListener('click', () => pill.classList.toggle('active'));
 });
 
+/* ── Tooltip positioning (fixed, avoids overflow clipping) ──── */
+document.querySelectorAll('.has-tooltip').forEach(wrapper => {
+  const popup = wrapper.querySelector('.tooltip-popup');
+  if (!popup) return;
+  wrapper.addEventListener('mouseenter', () => {
+    popup.style.display = 'block';
+    const rect = wrapper.getBoundingClientRect();
+    const popupWidth = 200;
+    let left = rect.left + rect.width / 2 - popupWidth / 2;
+    left = Math.max(6, Math.min(left, window.innerWidth - popupWidth - 6));
+    popup.style.left = left + 'px';
+    popup.style.top  = (rect.top - popup.offsetHeight - 10) + 'px';
+  });
+  wrapper.addEventListener('mouseleave', () => {
+    popup.style.display = 'none';
+  });
+});
+
 /* ── Column selector (Structured tab) ──────────────────────── */
 document.getElementById('structuredColSelector').addEventListener('click', e => {
   const pill = e.target.closest('.col-pill');
@@ -274,7 +292,7 @@ document.getElementById('scanSheetBtn').addEventListener('click', async () => {
   const btn = document.getElementById('scanSheetBtn');
   setBusy(btn, true);
   try {
-    const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     const idMatch = tab && tab.url
       ? tab.url.match(/docs\.google\.com\/spreadsheets\/d\/([a-zA-Z0-9_-]+)/)
       : null;

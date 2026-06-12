@@ -60,41 +60,16 @@ html, body {
   gap: 10px;
 }
 
-.interknot-badge {
-  height: 30px;
-  width: auto;
-  display: block;
-  flex-shrink: 0;
+.vo-badge {
+  background: var(--accent);
+  color: #ffffff;
+  font-family: 'Space Mono', monospace;
+  font-weight: 700;
+  font-size: 11px;
+  padding: 2px 7px;
+  border-radius: 3px;
+  letter-spacing: 0.5px;
 }
-
-.header-title-group {
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-}
-
-.header-title {
-  font-family: 'Noto Serif SC', serif;
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--text);
-  letter-spacing: 0.2px;
-  line-height: 1.2;
-}
-
-.header-sub {
-  display: flex;
-  align-items: center;
-  gap: 3px;
-}
-
-.zzz-glyph {
-  color: var(--accent2);
-  opacity: 0.55;
-}
-
-.zzz-glyph:first-child { width: 18px; height: 13px; }
-.zzz-glyph:last-child  { width: 14px; height: 10px; }
 
 .collapse-btn {
   background: none;
@@ -400,16 +375,10 @@ button { cursor: pointer; font-family: 'Noto Sans SC', sans-serif; }
 .action-row-multi { flex-wrap: wrap; }
 
 /* ─── Custom tooltips ────────────────────────────────────────────────────── */
-.has-tooltip {
-  position: relative;
-  display: inline-block;
-}
+.has-tooltip { display: inline-block; }
+
 .tooltip-popup {
-  display: none;
-  position: absolute;
-  bottom: calc(100% + 6px);
-  left: 50%;
-  transform: translateX(-50%);
+  position: fixed;
   background: #1e293b;
   color: #e2e8f0;
   font-family: 'Space Mono', monospace;
@@ -420,9 +389,10 @@ button { cursor: pointer; font-family: 'Noto Sans SC', sans-serif; }
   white-space: normal;
   width: 200px;
   text-align: center;
-  z-index: 100;
+  z-index: 9999;
   pointer-events: none;
   box-shadow: 0 2px 8px rgba(0,0,0,0.25);
+  display: none;
 }
 .tooltip-popup::after {
   content: '';
@@ -433,7 +403,6 @@ button { cursor: pointer; font-family: 'Noto Sans SC', sans-serif; }
   border: 5px solid transparent;
   border-top-color: #1e293b;
 }
-.has-tooltip:hover .tooltip-popup { display: block; }
 
 /* ─── Progress note ──────────────────────────────────────────────────────── */
 .progress-note {
