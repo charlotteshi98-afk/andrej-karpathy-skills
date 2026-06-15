@@ -50,6 +50,7 @@
       <button class="tab active" data-tab="general">Summary</button>
       <button class="tab" data-tab="structured">Structured</button>
       <button class="tab" data-tab="glossary">Glossary</button>
+      <button class="tab" data-tab="consistency">Consistency</button>
       <button class="tab" data-tab="archive">Archive</button>
     </div>
 
@@ -163,6 +164,27 @@
         </div>
         <div id="glossaryTable" class="table-scroll"></div>
         <div id="glossarySummary" class="glossary-summary"></div>
+      </div>
+    </div>
+
+    <!-- TAB: CONSISTENCY -->
+    <div id="tab-consistency" class="tab-content">
+      <p class="consistency-hint">Open the EN tracker Google Sheet in the active tab, then click Check. The tool will scan all numbered tabs (1., 2., …) and flag terms translated differently across them.</p>
+      <div class="action-row">
+        <span class="has-tooltip">
+          <button id="runConsistency" class="btn-gold">Check Consistency</button>
+          <span class="tooltip-popup">Scans all numbered tabs in the open Google Sheet and flags terms or names translated differently across tabs.</span>
+        </span>
+      </div>
+      <div id="consistencyProgress" class="progress-note" style="display:none"></div>
+      <div id="consistencyError" class="error-msg" style="display:none"></div>
+      <div id="consistencyOutput" class="output-area" style="display:none">
+        <div class="output-header">
+          <span class="output-label">Consistency Report</span>
+          <button id="copyConsistency" class="btn-copy">Copy</button>
+          <button id="saveConsistencyToArchive" class="btn-copy" style="display:none">Save</button>
+        </div>
+        <textarea id="consistencyText" class="output-text" readonly></textarea>
       </div>
     </div>
 

@@ -666,3 +666,11 @@ button { cursor: pointer; font-family: 'Noto Sans SC', sans-serif; }
   overflow-y: auto;
 }
 .archive-actions { display: flex; gap: 6px; margin-top: 4px; }
+
+/* ─── Consistency tab ─────────────────────────────────────────── */
+.consistency-hint {
+  font-size: 11px;
+  color: var(--text-dim);
+  margin-bottom: 12px;
+  line-height: 1.6;
+}

@@ -1154,6 +1154,193 @@ function downloadGlossaryExcel(terms) {
 
 
 /* ================================================================
+   FEATURE 5 — CONSISTENCY CHECK
+   ================================================================ */
+document.getElementById('runConsistency').addEventListener('click', async () => {
+  setError('consistencyError', '');
+  const btn      = document.getElementById('runConsistency');
+  const progress = document.getElementById('consistencyProgress');
+  setBusy(btn, true);
+  progress.style.display = 'block';
+
+  try {
+    // Step 1: validate active tab is a Google Sheet
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (!tab?.url?.includes('docs.google.com/spreadsheets')) {
+      throw new Error('The active tab is not a Google Sheet. Open the EN tracker sheet in the active browser tab, then click Check Consistency.');
+    }
+    const sheetIdMatch = tab.url.match(/spreadsheets\/d\/([a-zA-Z0-9_-]+)/);
+    if (!sheetIdMatch) throw new Error('Could not extract spreadsheet ID from the URL.');
+    const sheetId = sheetIdMatch[1];
+
+    // Step 2: read all sheet tab names + gids from the Sheets DOM
+    progress.textContent = 'Reading sheet tabs from DOM…';
+    let tabsResult;
+    try {
+      tabsResult = await chrome.scripting.executeScript({
+        target: { tabId: tab.id },
+        func: () => {
+          const els = document.querySelectorAll('.docs-sheet-tab');
+          return [...els].map(el => {
+            const name = el.querySelector('.docs-sheet-tab-name')?.textContent?.trim() || '';
+            const gid  = (el.id || '').replace('sheet-tab-', '');
+            return { name, gid };
+          });
+        },
+      });
+    } catch (e) {
+      throw new Error(`Could not read sheet tabs from the page: ${e.message}. Fix: make sure the sheet is fully loaded and the extension was reloaded after the latest update.`);
+    }
+
+    const allTabs = tabsResult[0]?.result || [];
+    // Numbered tabs: name starts with one or more digits followed by . or space
+    const numberedTabs = allTabs.filter(t => /^\d+[.\s]/.test(t.name) && t.gid !== '');
+    if (!numberedTabs.length) {
+      throw new Error(`No numbered tabs found (e.g. "1. Scene Name"). Found tabs: ${allTabs.map(t => `"${t.name}"`).join(', ') || 'none'}. Make sure the sheet is fully loaded.`);
+    }
+
+    // Step 3: fetch CSV for each numbered tab
+    const tabData = [];
+    for (let i = 0; i < numberedTabs.length; i++) {
+      const { name, gid } = numberedTabs[i];
+      progress.textContent = `Fetching tab ${i + 1}/${numberedTabs.length}: ${name}…`;
+      const url = `https://docs.google.com/spreadsheets/d/${sheetId}/export?format=csv&gid=${gid}`;
+      let csvResult;
+      try {
+        csvResult = await chrome.scripting.executeScript({
+          target: { tabId: tab.id },
+          func: async (csvUrl) => {
+            const r = await fetch(csvUrl, { credentials: 'include' });
+            if (!r.ok) return { ok: false, status: r.status };
+            const text = await r.text();
+            if (/^\s*<(!DOCTYPE|html)/i.test(text)) return { ok: false, status: 401 };
+            return { ok: true, text };
+          },
+          args: [url],
+        });
+      } catch (e) {
+        progress.textContent = `Skipping "${name}": ${e.message}`;
+        await new Promise(r => setTimeout(r, 600));
+        continue;
+      }
+      const res = csvResult[0]?.result;
+      if (!res?.ok) {
+        progress.textContent = `Skipping "${name}" (HTTP ${res?.status ?? '?'})`;
+        await new Promise(r => setTimeout(r, 600));
+        continue;
+      }
+      const lines = parseENTracker(new TextEncoder().encode(res.text).buffer);
+      if (lines.length) tabData.push({ name, lines });
+    }
+
+    if (!tabData.length) {
+      throw new Error('No EN tracker data found in any numbered tab. Check that the tabs contain VO ID, Chinese Script, and English columns.');
+    }
+
+    // Step 4: build unique (CN → EN) pair map across all tabs
+    progress.textContent = `Building term map across ${tabData.length} tab(s)…`;
+
+    // cnText → Map<enText, Set<tabName>>
+    const termMap = new Map();
+    for (const { name, lines } of tabData) {
+      const seen = new Set();
+      for (const line of lines) {
+        const cn = (line.chineseScript || '').trim();
+        const en = (line.latestEN || line.englishScript || '').trim();
+        if (!cn || !en) continue;
+        const key = cn + '|||' + en;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        if (!termMap.has(cn)) termMap.set(cn, new Map());
+        const variants = termMap.get(cn);
+        if (!variants.has(en)) variants.set(en, new Set());
+        variants.get(en).add(name);
+      }
+    }
+
+    // Pre-detect exact CN matches with 2+ EN translations
+    const directConflicts = [];
+    for (const [cn, variants] of termMap) {
+      if (variants.size > 1) {
+        directConflicts.push({
+          cn,
+          variants: [...variants.entries()].map(([en, tabs]) => `"${en}" (${[...tabs].join(', ')})`),
+        });
+      }
+    }
+
+    // Step 5: build input for Claude
+    progress.textContent = 'Sending to Claude for analysis…';
+
+    // Collect all unique (CN, EN, tab) pairs, capped at 800 to avoid context overflow
+    const allPairs = [];
+    for (const { name, lines } of tabData) {
+      const seen = new Set();
+      for (const line of lines) {
+        const cn = (line.chineseScript || '').trim();
+        const en = (line.latestEN || line.englishScript || '').trim();
+        if (!cn || !en) continue;
+        const key = cn + '|||' + en;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        allPairs.push(`[${name}] ${cn} → ${en}`);
+      }
+    }
+
+    const pairsText = allPairs.slice(0, 800).join('\n');
+    const tbRef = termBaseMap.size > 0
+      ? `\n\nEstablished glossary (authoritative — flag any row deviating from these):\n${[...termBaseMap.entries()].map(([cn, en]) => `${cn} → ${en}`).join('\n')}`
+      : '';
+    const directHint = directConflicts.length
+      ? `\n\nPre-detected exact-match conflicts (definitely include these):\n${directConflicts.map(c => `· ${c.cn}: ${c.variants.join(' | ')}`).join('\n')}`
+      : '';
+
+    const systemPrompt = `You are a professional game localization translator and QA reviewer specializing in translation consistency.
+
+You are reviewing an EN VO tracker spreadsheet that covers multiple story tabs. Each entry is: [Tab Name] Chinese source → English translation.
+
+Your task:
+1. Identify every case where the same Chinese term, name, or expression — whether an exact match or highly similar/synonymous in meaning — has been given 2 or more substantively different English translations across different tabs. Ignore trivial differences (punctuation, capitalisation, articles).
+2. For each inconsistency, output in exactly this format:
+
+CN: [the Chinese term or expression]
+Variants: [English version 1] (Tab X) | [English version 2] (Tab Y) | …
+Recommended: [your preferred translation and why, in one sentence]
+
+3. After all inconsistency entries, add:
+
+SUMMARY: X inconsistencies found. [One-sentence overall assessment of consistency quality.]
+
+Write in plain prose, no markdown symbols.${tbRef}${directHint}`;
+
+    const report = await callClaude(systemPrompt, `Translation pairs by tab (${allPairs.length} unique pairs across ${tabData.length} tabs):\n\n${pairsText}`);
+
+    const ta = document.getElementById('consistencyText');
+    ta.value = stripMarkdown(report);
+    document.getElementById('consistencyOutput').style.display = 'block';
+    requestAnimationFrame(() => autoResize(ta));
+    document.getElementById('saveConsistencyToArchive').style.display = '';
+    document.getElementById('saveConsistencyToArchive').onclick = () => {
+      saveToArchive('Consistency', 'Consistency Report', ta.value);
+    };
+  } catch (err) {
+    setError('consistencyError', err.message);
+  } finally {
+    progress.style.display = 'none';
+    setBusy(btn, false);
+  }
+});
+
+document.getElementById('copyConsistency').addEventListener('click', () => {
+  const txt = document.getElementById('consistencyText').value;
+  navigator.clipboard.writeText(txt).then(() => {
+    const b = document.getElementById('copyConsistency');
+    b.textContent = 'Copied!';
+    setTimeout(() => { b.textContent = 'Copy'; }, 1500);
+  });
+});
+
+/* ================================================================
    MARKDOWN → HTML (minimal)
    ================================================================ */
 function markdownToHtml(md) {
