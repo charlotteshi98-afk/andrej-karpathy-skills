@@ -303,20 +303,35 @@ document.getElementById('scanSheetBtn').addEventListener('click', async () => {
     const gidMatch = tab.url.match(/[#?&]gid=(\d+)/);
     const gid      = gidMatch ? gidMatch[1] : '0';
 
-    // CSV export honors gid, so only the visible sheet tab is fetched.
-    // Fetched via the background worker — direct fetch from the panel is blocked by CORS.
-    const result = await chrome.runtime.sendMessage({
-      type: 'fetchSheetCsv',
-      url: `https://docs.google.com/spreadsheets/d/${sheetId}/export?format=csv&gid=${gid}`,
-    });
+    // Fetch the CSV by injecting a fetch() call inside the Google Sheets tab itself.
+    // This avoids the CORS restriction that blocks the same request from the side panel.
+    const csvUrl = `https://docs.google.com/spreadsheets/d/${sheetId}/export?format=csv&gid=${gid}`;
+    let injected;
+    try {
+      injected = await chrome.scripting.executeScript({
+        target: { tabId: tab.id },
+        func: async (url) => {
+          const r = await fetch(url, { credentials: 'include' });
+          if (!r.ok) return { ok: false, status: r.status };
+          const text = await r.text();
+          if (/^\s*<(!DOCTYPE|html)/i.test(text)) return { ok: false, status: 401 };
+          return { ok: true, text };
+        },
+        args: [csvUrl],
+      });
+    } catch (e) {
+      throw new Error(`Could not inject into the Google Sheet tab: ${e.message}. Fix: make sure the tab is fully loaded and the extension has been reloaded at chrome://extensions after the latest update.`);
+    }
+
+    const result = injected[0]?.result;
     if (!result || !result.ok) {
-      if (result && (result.status === 401 || result.status === 403)) {
-        throw new Error('Google denied access to this sheet. Fix: make sure you are signed in to Google in this browser profile and your account can open the sheet, then try again.');
+      if (result?.status === 401 || result?.status === 403) {
+        throw new Error('Google denied access to this sheet (HTTP ' + result.status + '). Fix: make sure you are signed in to Google in this browser and your account can open the sheet, then try again.');
       }
-      if (result && result.status === 404) {
-        throw new Error('Sheet not found (HTTP 404). Fix: check that the sheet still exists and the URL in the current tab is correct.');
+      if (result?.status === 404) {
+        throw new Error('Sheet not found (HTTP 404). Fix: check the sheet still exists and the tab URL is correct.');
       }
-      throw new Error(`Could not read the sheet${result && result.status ? ` (HTTP ${result.status})` : ''}${result && result.error ? `: ${result.error}` : ''}. Fix: reload the extension at chrome://extensions, reload the sheet tab, then try again.`);
+      throw new Error(`Could not read sheet data (HTTP ${result?.status ?? '?'}). Fix: reload the sheet tab, then try again.`);
     }
     enLines = parseENTracker(new TextEncoder().encode(result.text).buffer);
     if (!enLines.length) {
