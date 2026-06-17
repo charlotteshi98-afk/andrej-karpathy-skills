@@ -1042,7 +1042,7 @@ function localDateTimeToUTC(dateObj, timeStr, timezone) {
     const localM = parseInt(Utilities.formatDate(utcEstimate, timezone, 'mm'), 10);
     const diffMin = (targetH * 60 + targetM) - (localH * 60 + localM);
     if (diffMin === 0) break;
-    utcEstimate = new Date(utcEstimate.getTime() - diffMin * 60 * 1000);
+    utcEstimate = new Date(utcEstimate.getTime() + diffMin * 60 * 1000);
   }
 
   return utcEstimate;
