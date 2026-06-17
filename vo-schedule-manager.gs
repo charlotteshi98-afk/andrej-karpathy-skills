@@ -1055,6 +1055,34 @@ function parseTimeToMinutes(timeStr) {
   return parseInt(m[1], 10) * 60 + parseInt(m[2], 10);
 }
 
+/**
+ * Converts any time value from getValues() to minutes since midnight.
+ * Google Sheets stores time cells as a decimal fraction of a day (e.g. 9:00 = 0.375),
+ * but may also return a Date object or a "HH:MM" string depending on the cell format.
+ */
+function timeValueToMinutes(val) {
+  if (val === '' || val === null || val === undefined) return null;
+  if (typeof val === 'number') {
+    // Sheets fractional day: multiply by 24*60 and round
+    return Math.round(val * 24 * 60);
+  }
+  if (val instanceof Date) {
+    // Apps Script may return a Date with the time component set
+    return val.getHours() * 60 + val.getMinutes();
+  }
+  if (typeof val === 'string') {
+    return parseTimeToMinutes(val);
+  }
+  return null;
+}
+
+/** Converts minutes-since-midnight to a "HH:MM" string for use with localDateTimeToUTC */
+function minutesToTimeStr(minutes) {
+  const h = Math.floor(minutes / 60) % 24;
+  const m = minutes % 60;
+  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+}
+
 /** Parses session PST time range "HH:MM - HH:MM" → { start, end } in minutes */
 function parseSessionPSTRange(timePSTStr) {
   if (!timePSTStr) return null;
@@ -1078,17 +1106,20 @@ function readAvailsData(availsSheet) {
     const name = (row[0] || '').toString().trim();
     const timezone = (row[1] || 'America/Los_Angeles').toString().trim();
     const dateVal = row[2];
-    const fromTime = (row[3] || '').toString().trim();
-    const toTime = (row[4] || '').toString().trim();
     const maxHours = parseFloat(row[5]);
 
-    if (!name || !dateVal || !fromTime || !toTime) return;
+    if (!name || !dateVal) return;
+
+    // Times may arrive as a decimal fraction (0.375 = 09:00), a Date, or a "HH:MM" string
+    const fromMinLocal = timeValueToMinutes(row[3]);
+    const toMinLocal = timeValueToMinutes(row[4]);
+    if (fromMinLocal === null || toMinLocal === null) return;
 
     const date = dateVal instanceof Date ? dateVal : new Date(dateVal);
     if (isNaN(date.getTime())) return;
 
-    const fromUTC = localDateTimeToUTC(date, fromTime, timezone);
-    const toUTC = localDateTimeToUTC(date, toTime, timezone);
+    const fromUTC = localDateTimeToUTC(date, minutesToTimeStr(fromMinLocal), timezone);
+    const toUTC = localDateTimeToUTC(date, minutesToTimeStr(toMinLocal), timezone);
     if (!fromUTC || !toUTC) return;
 
     // Get PST date string from the start UTC time
