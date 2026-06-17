@@ -1182,7 +1182,7 @@ function autoAssignMonitors() {
     if (NO_SESSION_VA_TEXTS.has(va)) return;
     if (backgrounds[i][0].toLowerCase() === CANCELLED_BG.toLowerCase()) return;
 
-    const dateStr = (row[IDX_DATE] || '').toString();
+    const dateStr = formatDateToPST(row[IDX_DATE]);
     const timePST = (row[IDX_TIME_PST] || '').toString();
     const timeRange = parseSessionPSTRange(timePST);
     if (!timeRange || !dateStr) return;
