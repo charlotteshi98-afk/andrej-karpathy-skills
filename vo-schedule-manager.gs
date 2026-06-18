@@ -1258,6 +1258,14 @@ function autoAssignMonitors() {
   // Write results to col U (1-indexed = IDX_MONITOR + 1 = 21)
   const MONITOR_COL_1BASED = IDX_MONITOR + 1;
 
+  // Remove any data validation on the monitor column so our writes don't trigger warnings
+  if (sessions.length > 0) {
+    const firstRow = Math.min(...sessions.map(s => s.rowIndex));
+    const lastSessionRow = Math.max(...sessions.map(s => s.rowIndex));
+    scheduleSheet.getRange(firstRow, MONITOR_COL_1BASED, lastSessionRow - firstRow + 1, 1)
+      .setDataValidation(null);
+  }
+
   // Clear monitor column for all processed session rows first
   sessions.forEach(session => {
     scheduleSheet.getRange(session.rowIndex, MONITOR_COL_1BASED)
