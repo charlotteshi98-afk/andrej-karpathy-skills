@@ -75,6 +75,10 @@ const CHANGE_DETECTION_INDICES = [
 const AVAILS_SHEET_NAME = 'Avails';
 const AVAILS_HEADERS = ['Name', 'Timezone', 'Date (their local)', 'From (HH:MM local)', 'To (HH:MM local)', 'Max Hours/Day'];
 const LINES_PER_HOUR_BENCHMARK = 30;
+
+// Monitor priority: first entry = highest priority; all others are equal.
+// Used only as a tiebreaker when two monitors have the same total hours.
+const MONITOR_PRIORITY_ORDER = ['Gabe'];
 const WARNING_BG = '#ff4444';
 const WARNING_FONT = '#ffffff';
 
@@ -1076,6 +1080,12 @@ function timeValueToMinutes(val) {
   return null;
 }
 
+/** Returns sort priority for a monitor name (lower = higher priority). */
+function getMonitorPriority(name) {
+  const idx = MONITOR_PRIORITY_ORDER.indexOf(name);
+  return idx === -1 ? MONITOR_PRIORITY_ORDER.length : idx;
+}
+
 /** Converts minutes-since-midnight to a "HH:MM" string for use with localDateTimeToUTC */
 function minutesToTimeStr(minutes) {
   const h = Math.floor(minutes / 60) % 24;
@@ -1161,9 +1171,33 @@ function autoAssignMonitors() {
     return;
   }
 
+  const ui = SpreadsheetApp.getUi();
+
   const avails = readAvailsData(availsSheet);
   if (avails.length === 0) {
-    SpreadsheetApp.getUi().alert(`No availability data found in the "${AVAILS_SHEET_NAME}" sheet (data starts on row 3).`);
+    ui.alert(`No availability data found in the "${AVAILS_SHEET_NAME}" sheet (data starts on row 3).`);
+    return;
+  }
+
+  // ── Date range prompt ──
+  const startResp = ui.prompt(
+    'Auto-Assign Monitors — Step 1 of 2',
+    'Assign sessions FROM date (yyyy-mm-dd, e.g. 2026-06-17):',
+    ui.ButtonSet.OK_CANCEL
+  );
+  if (startResp.getSelectedButton() !== ui.Button.OK) return;
+
+  const endResp = ui.prompt(
+    'Auto-Assign Monitors — Step 2 of 2',
+    'Assign sessions TO date (yyyy-mm-dd, e.g. 2026-07-09):',
+    ui.ButtonSet.OK_CANCEL
+  );
+  if (endResp.getSelectedButton() !== ui.Button.OK) return;
+
+  const filterStart = new Date(startResp.getResponseText().trim());
+  const filterEnd = new Date(endResp.getResponseText().trim());
+  if (isNaN(filterStart.getTime()) || isNaN(filterEnd.getTime())) {
+    ui.alert('Invalid date. Please use yyyy-mm-dd format (e.g. 2026-06-17).');
     return;
   }
 
@@ -1175,7 +1209,7 @@ function autoAssignMonitors() {
   const allValues = scheduleSheet.getRange(4, 1, numRows, numCols).getValues();
   const backgrounds = scheduleSheet.getRange(4, 1, numRows, 1).getBackgrounds();
 
-  // Collect sessions that need monitor assignment
+  // Collect sessions within the requested date range
   const sessions = [];
   allValues.forEach((row, i) => {
     const va = (row[IDX_VA] || '').toString();
@@ -1183,11 +1217,14 @@ function autoAssignMonitors() {
     if (backgrounds[i][0].toLowerCase() === CANCELLED_BG.toLowerCase()) return;
 
     const dateStr = formatDateToPST(row[IDX_DATE]);
+    if (!dateStr) return;
+
+    // Skip sessions outside the chosen date range
+    if (!parseDateInRange(dateStr, filterStart, filterEnd)) return;
+
     const timePST = (row[IDX_TIME_PST] || '').toString();
     const timeRange = parseSessionPSTRange(timePST);
-    if (!timeRange || !dateStr) return;
-
-    const durationHours = (timeRange.end - timeRange.start) / 60;
+    if (!timeRange) return;
 
     sessions.push({
       rowIndex: i + 4,
@@ -1195,26 +1232,28 @@ function autoAssignMonitors() {
       timePST,
       startMin: timeRange.start,
       endMin: timeRange.end,
-      durationHours
+      durationHours: (timeRange.end - timeRange.start) / 60
     });
   });
 
   if (sessions.length === 0) {
-    SpreadsheetApp.getUi().alert('No assignable sessions found.');
+    ui.alert('No assignable sessions found in that date range.');
     return;
   }
 
-  // Sort sessions by date then start time for greedy assignment
+  // Sort by date then start time for greedy assignment
   sessions.sort((a, b) => {
     const dc = a.dateStr.localeCompare(b.dateStr);
     return dc !== 0 ? dc : a.startMin - b.startMin;
   });
 
-  // Tracking state per monitor per day
-  const monitorHoursUsed = {};   // `${name}|${date}` → hours used
-  const monitorSlots = {};        // `${name}|${date}` → [{start, end}]
+  // Per-day tracking (overlap + daily cap)
+  const monitorHoursUsed = {};  // `${name}|${date}` → hours used today
+  const monitorSlots = {};       // `${name}|${date}` → [{start, end}]
+  // Global tracking (for even distribution across the full period)
+  const monitorTotalHours = {}; // name → total hours assigned so far
 
-  const assignments = {};    // rowIndex → monitor name
+  const assignments = {};
   const unassigned = [];
 
   sessions.forEach(session => {
@@ -1222,14 +1261,11 @@ function autoAssignMonitors() {
 
     const candidates = avails.filter(avail => {
       if (avail.pstDateStr !== dateStr) return false;
-      // Monitor must cover the full session
       if (avail.pstStartMin > startMin || avail.pstEndMin < endMin) return false;
 
       const key = `${avail.name}|${dateStr}`;
-      const used = monitorHoursUsed[key] || 0;
-      if (used + durationHours > avail.maxHoursPerDay) return false;
+      if ((monitorHoursUsed[key] || 0) + durationHours > avail.maxHoursPerDay) return false;
 
-      // No overlap with already-assigned slots
       const slots = monitorSlots[key] || [];
       if (slots.some(s => s.start < endMin && s.end > startMin)) return false;
 
@@ -1237,17 +1273,19 @@ function autoAssignMonitors() {
     });
 
     if (candidates.length > 0) {
-      // Prefer the monitor with the most remaining capacity
       candidates.sort((a, b) => {
-        const usedA = monitorHoursUsed[`${a.name}|${dateStr}`] || 0;
-        const usedB = monitorHoursUsed[`${b.name}|${dateStr}`] || 0;
-        return usedA - usedB;
+        // Primary: fewest total hours across the whole period (even distribution)
+        const totalDiff = (monitorTotalHours[a.name] || 0) - (monitorTotalHours[b.name] || 0);
+        if (Math.abs(totalDiff) > 0.001) return totalDiff;
+        // Tiebreaker: priority order (Gabe first, then others equally)
+        return getMonitorPriority(a.name) - getMonitorPriority(b.name);
       });
 
       const chosen = candidates[0];
       const key = `${chosen.name}|${dateStr}`;
       assignments[rowIndex] = chosen.name;
       monitorHoursUsed[key] = (monitorHoursUsed[key] || 0) + durationHours;
+      monitorTotalHours[chosen.name] = (monitorTotalHours[chosen.name] || 0) + durationHours;
       if (!monitorSlots[key]) monitorSlots[key] = [];
       monitorSlots[key].push({ start: startMin, end: endMin });
     } else {
@@ -1258,15 +1296,7 @@ function autoAssignMonitors() {
   // Write results to col U (1-indexed = IDX_MONITOR + 1 = 21)
   const MONITOR_COL_1BASED = IDX_MONITOR + 1;
 
-  // Remove any data validation on the monitor column so our writes don't trigger warnings
-  if (sessions.length > 0) {
-    const firstRow = Math.min(...sessions.map(s => s.rowIndex));
-    const lastSessionRow = Math.max(...sessions.map(s => s.rowIndex));
-    scheduleSheet.getRange(firstRow, MONITOR_COL_1BASED, lastSessionRow - firstRow + 1, 1)
-      .setDataValidation(null);
-  }
-
-  // Clear monitor column for all processed session rows first
+  // Clear existing values + styling for all processed rows
   sessions.forEach(session => {
     scheduleSheet.getRange(session.rowIndex, MONITOR_COL_1BASED)
       .setValue('')
@@ -1275,13 +1305,12 @@ function autoAssignMonitors() {
       .setFontWeight('normal');
   });
 
-  // Write successful assignments
+  // Write successful assignments (names are in the dropdown so no validation warning)
   Object.entries(assignments).forEach(([rowIndex, name]) => {
     scheduleSheet.getRange(parseInt(rowIndex), MONITOR_COL_1BASED).setValue(name);
   });
 
-  // Flag unassigned sessions
-  const unassignedSet = new Set(unassigned.map(s => s.rowIndex));
+  // Flag unassigned sessions with warning styling
   unassigned.forEach(session => {
     scheduleSheet.getRange(session.rowIndex, MONITOR_COL_1BASED)
       .setValue('⚠️ UNASSIGNED')
@@ -1290,17 +1319,21 @@ function autoAssignMonitors() {
       .setFontWeight('bold');
   });
 
-  // Summary popup
+  // Summary popup — include workload breakdown
+  const workloadLines = Object.entries(monitorTotalHours)
+    .sort((a, b) => b[1] - a[1])
+    .map(([name, hrs]) => `  ${name}: ${Math.round(hrs * 10) / 10} hrs`)
+    .join('\n');
+
   let msg = `✅ Auto-assignment complete!\n\nAssigned: ${Object.keys(assignments).length} session(s)`;
+  if (workloadLines) msg += `\n\nWorkload:\n${workloadLines}`;
   if (unassigned.length > 0) {
-    msg += `\n⚠️ Could not assign monitor to ${unassigned.length} session(s):\n`;
-    unassigned.forEach(s => {
-      msg += `  • ${s.dateStr}  ${s.timePST}\n`;
-    });
+    msg += `\n\n⚠️ Could not assign monitor to ${unassigned.length} session(s):\n`;
+    unassigned.forEach(s => { msg += `  • ${s.dateStr}  ${s.timePST}\n`; });
     msg += '\nCheck the Avails sheet — no monitor was available for these slots.';
   }
 
-  SpreadsheetApp.getUi().alert(msg);
+  ui.alert(msg);
 }
 
 // ========== 辅助 ==========
