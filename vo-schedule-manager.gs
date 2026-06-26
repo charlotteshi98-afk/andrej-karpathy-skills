@@ -656,7 +656,6 @@ function writeRowsToSheet(sheet, rows) {
   });
 
   applySystemFormatting(sheet, rows);
-  applyManualFormatting(sheet, rows);
 
   rows.forEach(r => { delete r._rowColor; });
 }
@@ -679,9 +678,9 @@ function applySystemFormatting(sheet, rows) {
     const fc = row.isCancelled ? CANCELLED_FONT : '#000000';
     const fl = row.isCancelled ? 'line-through' : 'none';
 
-    backgroundsFull[i] = new Array(TOTAL_MANAGED_COLUMNS).fill(bg);
-    fontColorsFull[i] = new Array(TOTAL_MANAGED_COLUMNS).fill(fc);
-    fontLinesFull[i] = new Array(TOTAL_MANAGED_COLUMNS).fill(fl);
+    backgroundsFull[i] = new Array(UPDATE_COLUMNS).fill(bg);
+    fontColorsFull[i] = new Array(UPDATE_COLUMNS).fill(fc);
+    fontLinesFull[i] = new Array(UPDATE_COLUMNS).fill(fl);
 
     if (row.isNoSession || row.isCancelled) {
       sessionFormulas[i] = [''];
@@ -703,7 +702,7 @@ function applySystemFormatting(sheet, rows) {
     }
   }
 
-  const fullRange = sheet.getRange(4, 1, n, TOTAL_MANAGED_COLUMNS);
+  const fullRange = sheet.getRange(4, 1, n, UPDATE_COLUMNS);
   fullRange.setBackgrounds(backgroundsFull);
   fullRange.setFontColors(fontColorsFull);
   fullRange.setFontLines(fontLinesFull);
