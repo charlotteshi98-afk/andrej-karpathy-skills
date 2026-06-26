@@ -187,6 +187,7 @@ function exportCalendarEventsToScheduleSheet() {
         manualFormat = prior.manualFormat;
         const hasChanges = hasBasicDataChanged(prior.basicData, freshBasic);
         const revivedFromCancelled = prior.isCancelled && !isCancelled;
+        if (revivedFromCancelled) manualFormat = null; // don't carry over grey cancelled formatting
         const isUpdated = !isCancelled && (hasChanges || revivedFromCancelled);
         studioNotes = buildStudioNotes(event, isUpdated);
       } else {
@@ -283,6 +284,25 @@ function exportCalendarEventsToScheduleSheet() {
   }
 
   sortFinalRows(finalRows, startDate, endDate);
+
+  // Defensive safeguard: if a row with a known event ID somehow ended up with
+  // empty manualData, restore it from the original read to prevent silent P-Z wipes.
+  const existingManualBackup = new Map();
+  for (const [eid, prior] of existingByEventId) {
+    if (prior.manualData.some(v => v !== '' && v !== null)) {
+      existingManualBackup.set(eid, { manualData: prior.manualData, manualFormat: prior.manualFormat });
+    }
+  }
+  finalRows.forEach(row => {
+    if (!row.eventId) return;
+    if (row.manualData.some(v => v !== '' && v !== null)) return;
+    const backup = existingManualBackup.get(row.eventId);
+    if (backup) {
+      row.manualData = backup.manualData;
+      if (!row.manualFormat) row.manualFormat = backup.manualFormat;
+      console.log(`🔒 P-Z restored for event ${row.eventId.substring(0, 20)}...`);
+    }
+  });
 
   console.log(`✅ 准备写入 ${finalRows.length} 行`);
 
@@ -1125,7 +1145,23 @@ function readAvailsData(availsSheet) {
     const toMinLocal = timeValueToMinutes(row[4]);
     if (fromMinLocal === null || toMinLocal === null) return;
 
-    const date = dateVal instanceof Date ? dateVal : new Date(dateVal);
+    // Extract the date as it appears in the spreadsheet (in the spreadsheet's own
+    // timezone) to avoid day-boundary shifts when the spreadsheet TZ differs from
+    // the monitor's TZ. Noon UTC is used as the reference so no real timezone
+    // (within ±12 h of UTC) can shift it to an adjacent calendar day.
+    let date;
+    if (dateVal instanceof Date) {
+      const sstz = SpreadsheetApp.getActiveSpreadsheet().getSpreadsheetTimeZone();
+      const ds = Utilities.formatDate(dateVal, sstz, 'yyyy-MM-dd');
+      const p = ds.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+      if (!p) return;
+      date = new Date(Date.UTC(+p[1], +p[2] - 1, +p[3], 12, 0, 0));
+    } else {
+      const ds = (dateVal || '').toString().trim();
+      const p = ds.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+      if (!p) return;
+      date = new Date(Date.UTC(+p[1], +p[2] - 1, +p[3], 12, 0, 0));
+    }
     if (isNaN(date.getTime())) return;
 
     const fromUTC = localDateTimeToUTC(date, minutesToTimeStr(fromMinLocal), timezone);
