@@ -307,7 +307,46 @@ function exportCalendarEventsToScheduleSheet() {
 
   console.log(`✅ 准备写入 ${finalRows.length} 行`);
 
+  // Save P-Z (columns 16-26) completely before write — this preserves all manual formatting,
+  // highlights, and data regardless of how system columns change.
+  const lastRow = sheet.getLastRow();
+  let pzBackup = null;
+  if (lastRow >= 4) {
+    const pzRange = sheet.getRange(4, MANUAL_DATA_START_COLUMN, lastRow - 3, MANUAL_COL_COUNT);
+    pzBackup = {
+      values: pzRange.getValues(),
+      backgrounds: pzRange.getBackgrounds(),
+      fontColors: pzRange.getFontColors(),
+      fontWeights: pzRange.getFontWeights(),
+      fontLines: pzRange.getFontLines(),
+      fontStyles: pzRange.getFontStyles(),
+      fontSizes: pzRange.getFontSizes(),
+      fontFamilies: pzRange.getFontFamilies(),
+      hAligns: pzRange.getHorizontalAlignments(),
+      vAligns: pzRange.getVerticalAlignments(),
+      wrapStrategies: pzRange.getWrapStrategies(),
+      numberFormats: pzRange.getNumberFormats()
+    };
+  }
+
   writeRowsToSheet(sheet, finalRows);
+
+  // Restore P-Z exactly as it was — zero changes to manual columns during export
+  if (pzBackup) {
+    const pzRange = sheet.getRange(4, MANUAL_DATA_START_COLUMN, pzBackup.values.length, MANUAL_COL_COUNT);
+    pzRange.setValues(pzBackup.values);
+    pzRange.setBackgrounds(pzBackup.backgrounds);
+    pzRange.setFontColors(pzBackup.fontColors);
+    pzRange.setFontWeights(pzBackup.fontWeights);
+    pzRange.setFontLines(pzBackup.fontLines);
+    pzRange.setFontStyles(pzBackup.fontStyles);
+    pzRange.setFontSizes(pzBackup.fontSizes);
+    pzRange.setFontFamilies(pzBackup.fontFamilies);
+    pzRange.setHorizontalAlignments(pzBackup.hAligns);
+    pzRange.setVerticalAlignments(pzBackup.vAligns);
+    pzRange.setWrapStrategies(pzBackup.wrapStrategies);
+    pzRange.setNumberFormats(pzBackup.numberFormats);
+  }
 
   const stats = getManualDataStats(sheet);
   console.log(`📊 完成：总 ${stats.totalRows} 行，含手动数据 ${stats.manualDataRows} 行，取消行 ${stats.cancelledRows} 行`);
@@ -1146,31 +1185,30 @@ function readAvailsData(availsSheet) {
     const toMinLocal = timeValueToMinutes(row[4]);
     if (fromMinLocal === null || toMinLocal === null) return;
 
-    // Extract the date as it appears in the spreadsheet (in the spreadsheet's own
-    // timezone) to avoid day-boundary shifts when the spreadsheet TZ differs from
-    // the monitor's TZ. Noon UTC is used as the reference so no real timezone
-    // (within ±12 h of UTC) can shift it to an adjacent calendar day.
-    let date;
-    if (dateVal instanceof Date) {
-      const sstz = SpreadsheetApp.getActiveSpreadsheet().getSpreadsheetTimeZone();
-      const ds = Utilities.formatDate(dateVal, sstz, 'yyyy-MM-dd');
-      const p = ds.match(/^(\d{4})-(\d{2})-(\d{2})$/);
-      if (!p) return;
-      date = new Date(Date.UTC(+p[1], +p[2] - 1, +p[3], 12, 0, 0));
-    } else {
-      const ds = (dateVal || '').toString().trim();
-      const p = ds.match(/^(\d{4})-(\d{2})-(\d{2})$/);
-      if (!p) return;
-      date = new Date(Date.UTC(+p[1], +p[2] - 1, +p[3], 12, 0, 0));
-    }
-    if (isNaN(date.getTime())) return;
+    // Read date as it appears in the spreadsheet's timezone (so Jun-29 displays as Jun-29)
+    // Use noon UTC as the reference day to prevent day-boundary shifts from timezone offsets
+    const sstz = SpreadsheetApp.getActiveSpreadsheet().getSpreadsheetTimeZone();
+    const dateObj = dateVal instanceof Date ? dateVal : new Date(dateVal);
+    if (isNaN(dateObj.getTime())) return;
 
-    const fromUTC = localDateTimeToUTC(date, minutesToTimeStr(fromMinLocal), timezone);
-    const toUTC = localDateTimeToUTC(date, minutesToTimeStr(toMinLocal), timezone);
+    const dateStr = Utilities.formatDate(dateObj, sstz, 'yyyy-MM-dd');
+    const p = dateStr.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (!p) return;
+
+    const refDate = new Date(Date.UTC(+p[1], +p[2] - 1, +p[3], 12, 0, 0));
+
+    // Convert monitor's local time to UTC, then format in PST
+    const fromUTC = localDateTimeToUTC(refDate, minutesToTimeStr(fromMinLocal), timezone);
+    const toUTC = localDateTimeToUTC(refDate, minutesToTimeStr(toMinLocal), timezone);
     if (!fromUTC || !toUTC) return;
 
-    // Get PST date string from the start UTC time
+    // Format in PST (same format as schedule sheet: "Jun-29" and "HH:mm")
     const pstDateStr = Utilities.formatDate(fromUTC, 'America/Los_Angeles', 'MMM-d');
+    const pstFromStr = Utilities.formatDate(fromUTC, 'America/Los_Angeles', 'HH:mm');
+    const pstToStr = Utilities.formatDate(toUTC, 'America/Los_Angeles', 'HH:mm');
+    const pstTimeRange = `${pstFromStr} - ${pstToStr}`;
+
+    // Also keep minute values for internal comparison
     const pstStartMin = parseInt(Utilities.formatDate(fromUTC, 'America/Los_Angeles', 'HH'), 10) * 60 +
                         parseInt(Utilities.formatDate(fromUTC, 'America/Los_Angeles', 'mm'), 10);
     const pstEndMin = parseInt(Utilities.formatDate(toUTC, 'America/Los_Angeles', 'HH'), 10) * 60 +
@@ -1179,9 +1217,10 @@ function readAvailsData(availsSheet) {
     result.push({
       name,
       timezone,
-      pstDateStr,
-      pstStartMin,
-      pstEndMin,
+      pstDateStr,           // "Jun-29"
+      pstTimeRange,         // "09:00 - 22:00" (for display/logging)
+      pstStartMin,          // 540 (09:00 in minutes)
+      pstEndMin,            // 1320 (22:00 in minutes)
       maxHoursPerDay: isNaN(maxHours) ? 8 : Math.min(maxHours, 8)
     });
   });
