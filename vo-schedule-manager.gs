@@ -299,7 +299,8 @@ function exportCalendarEventsToScheduleSheet() {
     const backup = existingManualBackup.get(row.eventId);
     if (backup) {
       row.manualData = backup.manualData;
-      if (!row.manualFormat) row.manualFormat = backup.manualFormat;
+      // Only restore format if it was never set (undefined), not if it was intentionally nulled
+      if (row.manualFormat === undefined) row.manualFormat = backup.manualFormat;
       console.log(`🔒 P-Z restored for event ${row.eventId.substring(0, 20)}...`);
     }
   });
@@ -1230,12 +1231,19 @@ function autoAssignMonitors() {
   );
   if (endResp.getSelectedButton() !== ui.Button.OK) return;
 
-  const filterStart = new Date(startResp.getResponseText().trim());
-  const filterEnd = new Date(endResp.getResponseText().trim());
-  if (isNaN(filterStart.getTime()) || isNaN(filterEnd.getTime())) {
+  // Parse dates in spreadsheet timezone to match the user's intent
+  // (they enter dates thinking in their local timezone, not UTC)
+  const startStr = startResp.getResponseText().trim();
+  const endStr = endResp.getResponseText().trim();
+  const startMatch = startStr.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  const endMatch = endStr.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!startMatch || !endMatch) {
     ui.alert('Invalid date. Please use yyyy-mm-dd format (e.g. 2026-06-17).');
     return;
   }
+  // Use noon UTC as anchor so no timezone can shift the calendar day
+  const filterStart = new Date(Date.UTC(+startMatch[1], +startMatch[2] - 1, +startMatch[3], 12, 0, 0));
+  const filterEnd = new Date(Date.UTC(+endMatch[1], +endMatch[2] - 1, +endMatch[3], 12, 0, 0));
 
   const lastRow = scheduleSheet.getLastRow();
   if (lastRow < 4) return;
