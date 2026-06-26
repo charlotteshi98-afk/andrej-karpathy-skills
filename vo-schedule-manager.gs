@@ -1226,6 +1226,10 @@ function autoAssignMonitors() {
     const timeRange = parseSessionPSTRange(timePST);
     if (!timeRange) return;
 
+    // Preserve manual entries — only touch empty cells or previous auto-assign warnings
+    const currentMonitor = (row[IDX_MONITOR] || '').toString().trim();
+    if (currentMonitor !== '' && currentMonitor !== '⚠️ UNASSIGNED') return;
+
     sessions.push({
       rowIndex: i + 4,
       dateStr,
