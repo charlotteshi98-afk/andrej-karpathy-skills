@@ -285,67 +285,94 @@ function exportCalendarEventsToScheduleSheet() {
 
   sortFinalRows(finalRows, startDate, endDate);
 
-  // Defensive safeguard: if a row with a known event ID somehow ended up with
-  // empty manualData, restore it from the original read to prevent silent P-Z wipes.
-  const existingManualBackup = new Map();
-  for (const [eid, prior] of existingByEventId) {
-    if (prior.manualData.some(v => v !== '' && v !== null)) {
-      existingManualBackup.set(eid, { manualData: prior.manualData, manualFormat: prior.manualFormat });
-    }
-  }
-  finalRows.forEach(row => {
-    if (!row.eventId) return;
-    if (row.manualData.some(v => v !== '' && v !== null)) return;
-    const backup = existingManualBackup.get(row.eventId);
-    if (backup) {
-      row.manualData = backup.manualData;
-      // Only restore format if it was never set (undefined), not if it was intentionally nulled
-      if (row.manualFormat === undefined) row.manualFormat = backup.manualFormat;
-      console.log(`🔒 P-Z restored for event ${row.eventId.substring(0, 20)}...`);
-    }
-  });
-
   console.log(`✅ 准备写入 ${finalRows.length} 行`);
 
-  // Save P-Z (columns 16-26) completely before write — this preserves all manual formatting,
-  // highlights, and data regardless of how system columns change.
-  const lastRow = sheet.getLastRow();
-  let pzBackup = null;
-  if (lastRow >= 4) {
-    const pzRange = sheet.getRange(4, MANUAL_DATA_START_COLUMN, lastRow - 3, MANUAL_COL_COUNT);
-    pzBackup = {
-      values: pzRange.getValues(),
-      backgrounds: pzRange.getBackgrounds(),
-      fontColors: pzRange.getFontColors(),
-      fontWeights: pzRange.getFontWeights(),
-      fontLines: pzRange.getFontLines(),
-      fontStyles: pzRange.getFontStyles(),
-      fontSizes: pzRange.getFontSizes(),
-      fontFamilies: pzRange.getFontFamilies(),
-      hAligns: pzRange.getHorizontalAlignments(),
-      vAligns: pzRange.getVerticalAlignments(),
-      wrapStrategies: pzRange.getWrapStrategies(),
-      numberFormats: pzRange.getNumberFormats()
-    };
+  // Snapshot P-Z keyed by event ID before write.
+  // This survives row reordering: new session inserted = rows shift, but event IDs stay stable.
+  const pzByEventId = new Map();
+  const lastRowBefore = sheet.getLastRow();
+  if (lastRowBefore >= 4) {
+    const nSnap = lastRowBefore - 3;
+    const eidVals = sheet.getRange(4, EVENT_ID_COLUMN, nSnap, 1).getValues();
+    const pzSnap = sheet.getRange(4, MANUAL_DATA_START_COLUMN, nSnap, MANUAL_COL_COUNT);
+    const snapValues      = pzSnap.getValues();
+    const snapBgs         = pzSnap.getBackgrounds();
+    const snapFcs         = pzSnap.getFontColors();
+    const snapFws         = pzSnap.getFontWeights();
+    const snapFls         = pzSnap.getFontLines();
+    const snapFsts        = pzSnap.getFontStyles();
+    const snapFszs        = pzSnap.getFontSizes();
+    const snapFfs         = pzSnap.getFontFamilies();
+    const snapHas         = pzSnap.getHorizontalAlignments();
+    const snapVas         = pzSnap.getVerticalAlignments();
+    const snapWrs         = pzSnap.getWrapStrategies();
+    const snapNfs         = pzSnap.getNumberFormats();
+    for (let i = 0; i < nSnap; i++) {
+      const eid = (eidVals[i][0] || '').toString().trim();
+      if (eid) {
+        pzByEventId.set(eid, {
+          values: snapValues[i], backgrounds: snapBgs[i], fontColors: snapFcs[i],
+          fontWeights: snapFws[i], fontLines: snapFls[i], fontStyles: snapFsts[i],
+          fontSizes: snapFszs[i], fontFamilies: snapFfs[i], hAligns: snapHas[i],
+          vAligns: snapVas[i], wrapStrategies: snapWrs[i], numberFormats: snapNfs[i]
+        });
+      }
+    }
   }
 
   writeRowsToSheet(sheet, finalRows);
 
-  // Restore P-Z exactly as it was — zero changes to manual columns during export
-  if (pzBackup) {
-    const pzRange = sheet.getRange(4, MANUAL_DATA_START_COLUMN, pzBackup.values.length, MANUAL_COL_COUNT);
-    pzRange.setValues(pzBackup.values);
-    pzRange.setBackgrounds(pzBackup.backgrounds);
-    pzRange.setFontColors(pzBackup.fontColors);
-    pzRange.setFontWeights(pzBackup.fontWeights);
-    pzRange.setFontLines(pzBackup.fontLines);
-    pzRange.setFontStyles(pzBackup.fontStyles);
-    pzRange.setFontSizes(pzBackup.fontSizes);
-    pzRange.setFontFamilies(pzBackup.fontFamilies);
-    pzRange.setHorizontalAlignments(pzBackup.hAligns);
-    pzRange.setVerticalAlignments(pzBackup.vAligns);
-    pzRange.setWrapStrategies(pzBackup.wrapStrategies);
-    pzRange.setNumberFormats(pzBackup.numberFormats);
+  // Restore P-Z by event ID — correct even when rows reorder
+  if (pzByEventId.size > 0) {
+    const lastRowAfter = sheet.getLastRow();
+    if (lastRowAfter >= 4) {
+      const nAfter = lastRowAfter - 3;
+      const eidValsAfter = sheet.getRange(4, EVENT_ID_COLUMN, nAfter, 1).getValues();
+      const pzAfter = sheet.getRange(4, MANUAL_DATA_START_COLUMN, nAfter, MANUAL_COL_COUNT);
+      const curValues = pzAfter.getValues();
+      const curBgs    = pzAfter.getBackgrounds();
+      const curFcs    = pzAfter.getFontColors();
+      const curFws    = pzAfter.getFontWeights();
+      const curFls    = pzAfter.getFontLines();
+      const curFsts   = pzAfter.getFontStyles();
+      const curFszs   = pzAfter.getFontSizes();
+      const curFfs    = pzAfter.getFontFamilies();
+      const curHas    = pzAfter.getHorizontalAlignments();
+      const curVas    = pzAfter.getVerticalAlignments();
+      const curWrs    = pzAfter.getWrapStrategies();
+      const curNfs    = pzAfter.getNumberFormats();
+
+      for (let i = 0; i < nAfter; i++) {
+        const eid = (eidValsAfter[i][0] || '').toString().trim();
+        const snap = eid ? pzByEventId.get(eid) : null;
+        if (!snap) continue;
+        curValues[i] = snap.values;
+        curBgs[i]    = snap.backgrounds;
+        curFcs[i]    = snap.fontColors;
+        curFws[i]    = snap.fontWeights;
+        curFls[i]    = snap.fontLines;
+        curFsts[i]   = snap.fontStyles;
+        curFszs[i]   = snap.fontSizes;
+        curFfs[i]    = snap.fontFamilies;
+        curHas[i]    = snap.hAligns;
+        curVas[i]    = snap.vAligns;
+        curWrs[i]    = snap.wrapStrategies;
+        curNfs[i]    = snap.numberFormats;
+      }
+
+      pzAfter.setValues(curValues);
+      pzAfter.setBackgrounds(curBgs);
+      pzAfter.setFontColors(curFcs);
+      pzAfter.setFontWeights(curFws);
+      pzAfter.setFontLines(curFls);
+      pzAfter.setFontStyles(curFsts);
+      pzAfter.setFontSizes(curFszs);
+      pzAfter.setFontFamilies(curFfs);
+      pzAfter.setHorizontalAlignments(curHas);
+      pzAfter.setVerticalAlignments(curVas);
+      pzAfter.setWrapStrategies(curWrs);
+      pzAfter.setNumberFormats(curNfs);
+    }
   }
 
   const stats = getManualDataStats(sheet);
@@ -1131,8 +1158,10 @@ function timeValueToMinutes(val) {
     return Math.round(val * 24 * 60);
   }
   if (val instanceof Date) {
-    // Apps Script may return a Date with the time component set
-    return val.getHours() * 60 + val.getMinutes();
+    // Use the spreadsheet timezone so the time reads as the user entered it
+    const sstz = SpreadsheetApp.getActiveSpreadsheet().getSpreadsheetTimeZone();
+    return parseInt(Utilities.formatDate(val, sstz, 'HH'), 10) * 60 +
+           parseInt(Utilities.formatDate(val, sstz, 'mm'), 10);
   }
   if (typeof val === 'string') {
     return parseTimeToMinutes(val);
@@ -1292,6 +1321,10 @@ function autoAssignMonitors() {
   const allValues = scheduleSheet.getRange(4, 1, numRows, numCols).getValues();
   const backgrounds = scheduleSheet.getRange(4, 1, numRows, 1).getBackgrounds();
 
+  // Read session dates in the spreadsheet's own timezone so "Jun-29" in column A
+  // is always read as "Jun-29", regardless of PST/UTC conversion.
+  const sstz = ss.getSpreadsheetTimeZone();
+
   // Collect sessions within the requested date range
   const sessions = [];
   allValues.forEach((row, i) => {
@@ -1299,7 +1332,10 @@ function autoAssignMonitors() {
     if (NO_SESSION_VA_TEXTS.has(va)) return;
     if (backgrounds[i][0].toLowerCase() === CANCELLED_BG.toLowerCase()) return;
 
-    const dateStr = formatDateToPST(row[IDX_DATE]);
+    const rawDate = row[IDX_DATE];
+    const dateStr = rawDate instanceof Date
+      ? Utilities.formatDate(rawDate, sstz, 'MMM-d')
+      : (rawDate || '').toString().trim();
     if (!dateStr) return;
 
     // Skip sessions outside the chosen date range
