@@ -108,6 +108,16 @@ document.querySelectorAll('.lang-toggle .lang-btn').forEach(btn => {
   });
 });
 
+/* ── Language toggle (Structured tab) ──────────────────────── */
+let structuredLang = 'zh';
+document.querySelectorAll('#structuredLangToggle .lang-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('#structuredLangToggle .lang-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    structuredLang = btn.dataset.lang;
+  });
+});
+
 /* ── Pill toggles (General tab) ────────────────────────────── */
 document.querySelectorAll('#summaryOptions .pill').forEach(pill => {
   pill.addEventListener('click', () => pill.classList.toggle('active'));
@@ -309,6 +319,27 @@ function renderENMeta() {
   `;
 }
 
+/* ── Fetch sheet CSV from inside the Google Sheets tab ──
+   Tries the same-origin gviz endpoint first: the plain export URL
+   redirects to googleusercontent.com, which the Sheets page's own
+   security policy blocks ("Failed to fetch"). Falls back to the
+   export URL in case gviz is unavailable. */
+async function fetchSheetCsv(tabId, sheetId, gid) {
+  const urls = [
+    `https://docs.google.com/spreadsheets/d/${sheetId}/gviz/tq?tqx=out:csv&gid=${gid}`,
+    `https://docs.google.com/spreadsheets/d/${sheetId}/export?format=csv&gid=${gid}`,
+  ];
+  let lastErr;
+  for (const url of urls) {
+    try {
+      return await fetchInSheetTab(tabId, url);
+    } catch (e) {
+      lastErr = e;
+    }
+  }
+  throw lastErr;
+}
+
 /* ── Fetch a URL from inside the Google Sheets tab (avoids CORS) ──
    All errors are caught inside the injected function and translated
    into actionable messages here. */
@@ -378,8 +409,7 @@ document.getElementById('scanSheetBtn').addEventListener('click', async () => {
 
     // Fetch the CSV by injecting a fetch() call inside the Google Sheets tab itself.
     // This avoids the CORS restriction that blocks the same request from the side panel.
-    const csvUrl = `https://docs.google.com/spreadsheets/d/${sheetId}/export?format=csv&gid=${gid}`;
-    const result = await fetchInSheetTab(tab.id, csvUrl);
+    const result = await fetchSheetCsv(tab.id, sheetId, gid);
     enLines = parseENTracker(new TextEncoder().encode(result.text).buffer);
     enFileName = (tab.title || 'Google Sheet').replace(/ - Google (Sheets|表格)$/, '');
     if (!enLines.length) {
@@ -754,6 +784,31 @@ function setError(id, msg) {
   el.style.display = 'block';
 }
 
+/* ── Pause / Resume controller for multi-call generations ───────
+   Pausing takes effect between API calls: the current call finishes,
+   then the loop waits until Resume is clicked. */
+function createPauseCtl(btnId) {
+  const btn = document.getElementById(btnId);
+  const ctl = { paused: false };
+  btn.addEventListener('click', () => {
+    ctl.paused = !ctl.paused;
+    btn.textContent = ctl.paused ? 'Resume' : 'Pause';
+  });
+  ctl.show = () => { ctl.paused = false; btn.textContent = 'Pause'; btn.style.display = ''; };
+  ctl.hide = () => { btn.style.display = 'none'; };
+  ctl.wait = async (progressEl) => {
+    if (!ctl.paused) return;
+    const prev = progressEl ? progressEl.textContent : '';
+    if (progressEl) progressEl.textContent = 'Paused — click Resume to continue…';
+    while (ctl.paused) await new Promise(r => setTimeout(r, 300));
+    if (progressEl) progressEl.textContent = prev;
+  };
+  return ctl;
+}
+const pauseComprehensive = createPauseCtl('pauseComprehensive');
+const pauseStructured    = createPauseCtl('pauseStructured');
+const pauseConsistency   = createPauseCtl('pauseConsistency');
+
 function setBusy(btn, busy, originalHTML) {
   if (busy) {
     btn._originalHTML = btn.innerHTML;
@@ -1005,13 +1060,16 @@ document.getElementById('generateComprehensive').addEventListener('click', async
 
     const segSummaries = [];
     progress.style.display = 'block';
+    pauseComprehensive.show();
     for (let i = 0; i < segments.length; i++) {
       progress.textContent = `Analyzing segment ${i + 1}/${segments.length}…`;
+      await pauseComprehensive.wait(progress);
       segSummaries.push(await callClaude(segPrompt, segments[i]));
     }
 
     // Stage 2: comprehensive analysis from segment summaries
     progress.textContent = 'Writing comprehensive analysis…';
+    await pauseComprehensive.wait(progress);
     const langLine = usingEN
       ? '- Output in English to match the segment summaries'
       : '- Output in Chinese to match the segment summaries';
@@ -1073,6 +1131,7 @@ ${langLine}
     setError('generalError', err.message);
   } finally {
     progress.style.display = 'none';
+    pauseComprehensive.hide();
     setBusy(btn, false);
   }
 });
@@ -1107,15 +1166,22 @@ document.getElementById('generateStructured').addEventListener('click', async ()
   })));
 
   try {
+    const useEN = structuredLang === 'en';
+    pauseStructured.show();
+
     // Pass 1: all scenes — basic info is already from parsed data
     // Use one API call to get short descriptions / bullet per scene
     const digest = buildScriptDigest(cnScenes);
+    const structGlossary = useEN ? buildGlossaryRef(digest) : '';
     const systemP1 = `You are a game localization producer analyzing a VO script.
 For each scene (marked === 场景N [PID:xxx] ===), output one pipe-delimited line:
 PerformID|ShortDescription
-ShortDescription should be ≤12 Chinese characters summarizing what happens.
-Output ONLY the data lines, no headers, no extra text.`;
+${useEN
+    ? 'ShortDescription should be ≤8 English words summarizing what happens. The script is in Chinese; write the descriptions in English.'
+    : 'ShortDescription should be ≤12 Chinese characters summarizing what happens.'}
+Output ONLY the data lines, no headers, no extra text.${structGlossary}`;
 
+    await pauseStructured.wait(structProgress);
     const pass1Text = await callClaude(systemP1, digest);
     const descMap = {};
     pass1Text.split('\n').forEach(line => {
@@ -1155,13 +1221,17 @@ Output ONLY the data lines, no headers, no extra text.`;
 
     const sysP2 = `You will receive several scene blocks, each starting with [PID:xxx]. For EACH scene output exactly one pipe-delimited line:
 PID|summary
-The summary is ≤30 Chinese characters for a localization team, focusing on key emotional beats and story developments. Output ONLY the data lines, one per scene, no headers, no extra text.`;
+${useEN
+    ? 'The summary is ≤20 English words for a localization team, focusing on key emotional beats and story developments. The scenes are in Chinese; write the summaries in English.'
+    : 'The summary is ≤30 Chinese characters for a localization team, focusing on key emotional beats and story developments.'}
+Output ONLY the data lines, one per scene, no headers, no extra text.${structGlossary}`;
 
     let consecutiveFailures = 0;
     let done = 0;
     for (let bi = 0; bi < batches.length; bi++) {
       const batch = batches[bi];
       structProgress.textContent = `Summarizing scenes ${done + 1}–${done + batch.length}/${cnScenes.length}…`;
+      await pauseStructured.wait(structProgress);
       const input = batch.map(b => b.d).join('\n\n');
       try {
         let raw;
@@ -1183,7 +1253,7 @@ The summary is ≤30 Chinese characters for a localization team, focusing on key
           const idx = structuredRows.findIndex(r => r.performId === scene.performId);
           if (idx === -1) continue;
           const voCount = scene.lines.filter(l => l.hasVO).length;
-          const label = voCount === 0 ? '【无配音场景】' : '';
+          const label = voCount === 0 ? (useEN ? '[No VO] ' : '【无配音场景】') : '';
           const summary = sumMap[scene.performId];
           structuredRows[idx].storySummary = summary
             ? label + summary
@@ -1217,6 +1287,7 @@ The summary is ≤30 Chinese characters for a localization team, focusing on key
     setError('structuredError', err.message);
   } finally {
     structProgress.style.display = 'none';
+    pauseStructured.hide();
     setBusy(btn, false);
   }
 });
@@ -1368,6 +1439,7 @@ document.getElementById('runConsistency').addEventListener('click', async () => 
   const progress = document.getElementById('consistencyProgress');
   setBusy(btn, true);
   progress.style.display = 'block';
+  pauseConsistency.show();
 
   try {
     // Step 1: validate active tab is a Google Sheet
@@ -1410,10 +1482,10 @@ document.getElementById('runConsistency').addEventListener('click', async () => 
     for (let i = 0; i < numberedTabs.length; i++) {
       const { name, gid } = numberedTabs[i];
       progress.textContent = `Fetching tab ${i + 1}/${numberedTabs.length}: ${name}…`;
-      const url = `https://docs.google.com/spreadsheets/d/${sheetId}/export?format=csv&gid=${gid}`;
+      await pauseConsistency.wait(progress);
       let res;
       try {
-        res = await fetchInSheetTab(tab.id, url);
+        res = await fetchSheetCsv(tab.id, sheetId, gid);
       } catch (e) {
         progress.textContent = `Skipping "${name}": ${e.message}`;
         await new Promise(r => setTimeout(r, 600));
@@ -1461,6 +1533,7 @@ document.getElementById('runConsistency').addEventListener('click', async () => 
 
     // Step 5: build input for Claude
     progress.textContent = 'Sending to Claude for analysis…';
+    await pauseConsistency.wait(progress);
 
     // Collect all unique (CN, EN, tab) pairs, capped at 800 to avoid context overflow
     const allPairs = [];
@@ -1517,6 +1590,7 @@ Write in plain prose, no markdown symbols.${tbRef}${directHint}`;
     setError('consistencyError', err.message);
   } finally {
     progress.style.display = 'none';
+    pauseConsistency.hide();
     setBusy(btn, false);
   }
 });

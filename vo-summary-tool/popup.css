@@ -421,6 +421,15 @@ button { cursor: pointer; font-family: 'Noto Sans SC', sans-serif; }
   margin-bottom: 10px;
 }
 
+.progress-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.progress-row .progress-note { flex: 1; margin-bottom: 0; }
+.progress-row:has(.progress-note[style*="block"]) { margin-bottom: 10px; }
+.pause-btn { flex-shrink: 0; }
+
 /* ─── Error ──────────────────────────────────────────────────────────────── */
 .error-msg {
   background: rgba(220,38,38,0.07);

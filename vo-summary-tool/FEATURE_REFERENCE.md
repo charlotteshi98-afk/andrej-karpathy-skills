@@ -82,7 +82,13 @@ To save tokens, only glossary entries whose CN or EN term actually appears in th
 
 ### Google Sheets Scan
 
-Because the side panel page is blocked by CORS when fetching `docs.google.com` directly, all Google Sheets access uses `chrome.scripting.executeScript` to run fetch calls inside the active Sheets tab (shared helper `fetchInSheetTab`). The tab's own session cookies are used, so the user must be logged in to Google. Network errors are caught inside the injected script, and every failure mode (blocked injection, closed tab, sign-in redirect, 401/403/404) maps to a specific message with a fix.
+Because the side panel page is blocked by CORS when fetching `docs.google.com` directly, all Google Sheets access uses `chrome.scripting.executeScript` to run fetch calls inside the active Sheets tab (shared helpers `fetchSheetCsv` → `fetchInSheetTab`). The tab's own session cookies are used, so the user must be logged in to Google.
+
+Two CSV endpoints are tried in order:
+1. `…/gviz/tq?tqx=out:csv&gid=N` — same-origin, no redirect (preferred; the plain export URL redirects to `googleusercontent.com`, which the Sheets page's security policy blocks, causing "Failed to fetch")
+2. `…/export?format=csv&gid=N` — fallback
+
+Network errors are caught inside the injected script, and every failure mode (blocked injection, closed tab, sign-in redirect, 401/403/404) maps to a specific message with a fix.
 
 The Scan button in the Summary tab fetches only the currently active sheet tab (`gid` read from the URL hash).
 
@@ -186,9 +192,9 @@ Scenes are grouped into batches of ~8 000 characters and each batch is sent in O
 ```
 
 **Prompt**:
-> For EACH scene output exactly one pipe-delimited line: `PID|summary`. The summary is ≤30 Chinese characters for a localization team, focusing on key emotional beats and story developments. Output ONLY the data lines.
+> For EACH scene output exactly one pipe-delimited line: `PID|summary`. The summary is ≤30 Chinese characters (中文 mode) or ≤20 English words (English mode) for a localization team, focusing on key emotional beats and story developments. Output ONLY the data lines.
 
-Scenes with zero VO lines are prefixed `【无配音场景】`.
+A 中文/English toggle next to Generate Table selects the output language for both the short descriptions (pass 1) and story summaries (pass 2). In English mode the reference glossary (if loaded) is injected into both prompts. Scenes with zero VO lines are prefixed `【无配音场景】` (or `[No VO]` in English mode).
 
 **Error handling**: if a batch hits a 429 / rate-limit, the tool waits 30 seconds and retries once. If 2 batches fail consecutively, the table stops and reports the last error. Real error text is shown per row.
 
@@ -289,6 +295,9 @@ Up to 800 unique `[Tab Name] CN → EN` pairs are sent to Claude.
 
 ### `stripMarkdown(text)`
 Removes `##`/`###` heading markers, `**bold**`, `*italic*` asterisks. Converts `- ` / `* ` list markers to `· `. Applied to all Claude output before display.
+
+### Pause / Resume
+Comprehensive Analysis, Structured table, and Consistency Check show a **Pause** button next to their progress note while running. Pausing takes effect between API calls: the current call finishes, then the loop waits until Resume is clicked. (The plain Summary is a single call, so it has no pause.)
 
 ### `autoResize(textarea)`
 Sets `height: auto` then `height = scrollHeight` inside a `requestAnimationFrame` so the measurement happens after the layout paint.

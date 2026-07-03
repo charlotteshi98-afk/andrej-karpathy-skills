@@ -97,7 +97,10 @@
         </span>
       </div>
       <div id="generalProgress" class="progress-note" style="display:none"></div>
-      <div id="comprehensiveProgress" class="progress-note" style="display:none"></div>
+      <div class="progress-row">
+        <div id="comprehensiveProgress" class="progress-note" style="display:none"></div>
+        <button id="pauseComprehensive" class="btn-copy pause-btn" style="display:none">Pause</button>
+      </div>
       <div id="generalError" class="error-msg" style="display:none"></div>
       <div id="generalOutput" class="output-area" style="display:none">
         <div class="output-header">
@@ -122,8 +125,15 @@
 </div>
       <div class="action-row">
         <button id="generateStructured" class="btn-gold">Generate Table</button>
+        <div class="lang-toggle" id="structuredLangToggle">
+          <button class="lang-btn active" data-lang="zh">中文</button>
+          <button class="lang-btn" data-lang="en">English</button>
+        </div>
       </div>
-      <div id="structuredProgress" class="progress-note" style="display:none"></div>
+      <div class="progress-row">
+        <div id="structuredProgress" class="progress-note" style="display:none"></div>
+        <button id="pauseStructured" class="btn-copy pause-btn" style="display:none">Pause</button>
+      </div>
       <div id="structuredError" class="error-msg" style="display:none"></div>
       <div id="structuredOutput" class="output-area" style="display:none">
         <div class="output-header">
@@ -172,7 +182,10 @@
           <span class="tooltip-popup">Scans all numbered tabs in the open Google Sheet and flags terms or names translated differently across tabs.</span>
         </span>
       </div>
-      <div id="consistencyProgress" class="progress-note" style="display:none"></div>
+      <div class="progress-row">
+        <div id="consistencyProgress" class="progress-note" style="display:none"></div>
+        <button id="pauseConsistency" class="btn-copy pause-btn" style="display:none">Pause</button>
+      </div>
       <div id="consistencyError" class="error-msg" style="display:none"></div>
       <div id="consistencyOutput" class="output-area" style="display:none">
         <div class="output-header">
