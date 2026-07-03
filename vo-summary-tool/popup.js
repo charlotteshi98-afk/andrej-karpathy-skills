@@ -17,11 +17,15 @@ let structuredRows = [];  // [{performId, type, description, lineCount, voCount,
 let structuredCols = [0,1,2,3,4,5];
 let archives = [];
 
-/* ── On load: restore API key ───────────────────────────────── */
-chrome.storage.local.get(['apiKey', 'fontSize', 'structuredCols', 'archives'], (result) => {
+/* ── On load: restore API key, term base, prefs ─────────────── */
+chrome.storage.local.get(['apiKey', 'fontSize', 'structuredCols', 'archives', 'termBase', 'termBaseName'], (result) => {
   if (result.apiKey) {
     document.getElementById('apiKeyInput').value = result.apiKey;
     updateKeyStatus(true);
+    setApiBarCollapsed(true);
+  }
+  if (result.termBase && result.termBase.length) {
+    applyTermBase(new Map(result.termBase), result.termBaseName || 'saved term base', false);
   }
   if (result.fontSize) {
     const size = result.fontSize;
@@ -54,8 +58,19 @@ document.querySelectorAll('.fsz-btn').forEach(btn => {
 document.getElementById('saveApiKey').addEventListener('click', () => {
   const key = document.getElementById('apiKeyInput').value.trim();
   if (!key) { updateKeyStatus(false); return; }
-  chrome.storage.local.set({ apiKey: key }, () => updateKeyStatus(true));
+  chrome.storage.local.set({ apiKey: key }, () => {
+    updateKeyStatus(true);
+    setApiBarCollapsed(true);
+  });
 });
+
+/* Collapse the key input once saved; "Key" button re-expands it */
+function setApiBarCollapsed(collapsed) {
+  document.getElementById('apiKeyInput').style.display = collapsed ? 'none' : '';
+  document.getElementById('saveApiKey').style.display  = collapsed ? 'none' : '';
+  document.getElementById('changeApiKey').style.display = collapsed ? '' : 'none';
+}
+document.getElementById('changeApiKey').addEventListener('click', () => setApiBarCollapsed(false));
 
 function updateKeyStatus(ok) {
   const el = document.getElementById('apiKeyStatus');
@@ -216,12 +231,16 @@ function handleCNFile(file) {
   reader.onload = (e) => {
     try {
       cnScenes = parseCNScript(e.target.result);
+      if (!cnScenes.length) throw new Error('No scenes found — the header layout was not recognized.');
+      hideColMap('cn');
       cnZone.classList.add('has-file');
       cnZone.querySelector('.upload-label').textContent = file.name;
       cnZone.querySelector('.upload-icon').textContent = '✓';
       renderCNMeta();
+      setError('generalError', '');
     } catch (err) {
-      showError('cnUploadZone', err.message);
+      setError('generalError', 'CN script: ' + err.message + ' You can map the columns manually below.');
+      showColMapPanel('cn');
     }
   };
   reader.readAsArrayBuffer(file);
@@ -266,12 +285,16 @@ function handleENFile(file) {
   reader.onload = (e) => {
     try {
       enLines = parseENTracker(e.target.result);
+      if (!enLines.length) throw new Error('No VO lines found — the header layout was not recognized.');
+      hideColMap('en');
       enZone.classList.add('has-file');
       enZone.querySelector('.upload-label').textContent = file.name;
       enZone.querySelector('.upload-icon').textContent = '✓';
       renderENMeta();
+      setError('generalError', '');
     } catch (err) {
-      setError('generalError', err.message);
+      setError('generalError', 'EN tracker: ' + err.message + ' You can map the columns manually below.');
+      showColMapPanel('en');
     }
   };
   reader.readAsArrayBuffer(file);
@@ -284,6 +307,56 @@ function renderENMeta() {
     <span class="meta-chip gold">${enLines.length} VO lines</span>
     <span class="meta-chip">${escapeHtml(enFileName)}</span>
   `;
+}
+
+/* ── Fetch a URL from inside the Google Sheets tab (avoids CORS) ──
+   All errors are caught inside the injected function and translated
+   into actionable messages here. */
+async function fetchInSheetTab(tabId, url) {
+  let injected;
+  try {
+    injected = await chrome.scripting.executeScript({
+      target: { tabId },
+      func: async (u) => {
+        try {
+          const r = await fetch(u, { credentials: 'include' });
+          if (!r.ok) return { ok: false, status: r.status };
+          const text = await r.text();
+          if (/^\s*<(!DOCTYPE|html)/i.test(text)) return { ok: false, status: 401 };
+          return { ok: true, text };
+        } catch (e) {
+          return { ok: false, netErr: String(e && e.message || e) };
+        }
+      },
+      args: [url],
+    });
+  } catch (e) {
+    const m = e.message || '';
+    if (/Cannot access|cannot be scripted|chrome:\/\//i.test(m)) {
+      throw new Error('Chrome blocked access to this tab. Fix: open chrome://extensions, click Reload on the VO Script Summary Tool, accept the new permission prompt, then reload the Google Sheet tab and try again.');
+    }
+    if (/No tab with id|Frame with ID|not exist/i.test(m)) {
+      throw new Error('The Google Sheet tab could not be reached (it may have been closed or is still loading). Fix: make sure the sheet is the active tab and fully loaded, then try again.');
+    }
+    throw new Error(`Could not run inside the Google Sheet tab: ${m}. Fix: reload the extension at chrome://extensions and reload the sheet tab.`);
+  }
+  const result = injected && injected[0] && injected[0].result;
+  if (!result) {
+    throw new Error('The Google Sheet tab did not respond. Fix: reload the sheet tab and try again once it is fully loaded.');
+  }
+  if (!result.ok) {
+    if (result.netErr) {
+      throw new Error(`Network error while fetching sheet data: ${result.netErr}. Fix: check your connection and reload the sheet tab.`);
+    }
+    if (result.status === 401 || result.status === 403) {
+      throw new Error(`Google denied access to this sheet (HTTP ${result.status}). Fix: sign in to Google in this browser with an account that can open the sheet, then try again.`);
+    }
+    if (result.status === 404) {
+      throw new Error('Sheet not found (HTTP 404). Fix: check the sheet still exists and the tab URL is correct.');
+    }
+    throw new Error(`Could not read sheet data (HTTP ${result.status ?? '?'}). Fix: reload the sheet tab, then try again.`);
+  }
+  return result;
 }
 
 /* ── Scan EN tracker from the Google Sheet in the current tab ── */
@@ -306,38 +379,13 @@ document.getElementById('scanSheetBtn').addEventListener('click', async () => {
     // Fetch the CSV by injecting a fetch() call inside the Google Sheets tab itself.
     // This avoids the CORS restriction that blocks the same request from the side panel.
     const csvUrl = `https://docs.google.com/spreadsheets/d/${sheetId}/export?format=csv&gid=${gid}`;
-    let injected;
-    try {
-      injected = await chrome.scripting.executeScript({
-        target: { tabId: tab.id },
-        func: async (url) => {
-          const r = await fetch(url, { credentials: 'include' });
-          if (!r.ok) return { ok: false, status: r.status };
-          const text = await r.text();
-          if (/^\s*<(!DOCTYPE|html)/i.test(text)) return { ok: false, status: 401 };
-          return { ok: true, text };
-        },
-        args: [csvUrl],
-      });
-    } catch (e) {
-      throw new Error(`Could not inject into the Google Sheet tab: ${e.message}. Fix: make sure the tab is fully loaded and the extension has been reloaded at chrome://extensions after the latest update.`);
-    }
-
-    const result = injected[0]?.result;
-    if (!result || !result.ok) {
-      if (result?.status === 401 || result?.status === 403) {
-        throw new Error('Google denied access to this sheet (HTTP ' + result.status + '). Fix: make sure you are signed in to Google in this browser and your account can open the sheet, then try again.');
-      }
-      if (result?.status === 404) {
-        throw new Error('Sheet not found (HTTP 404). Fix: check the sheet still exists and the tab URL is correct.');
-      }
-      throw new Error(`Could not read sheet data (HTTP ${result?.status ?? '?'}). Fix: reload the sheet tab, then try again.`);
-    }
+    const result = await fetchInSheetTab(tab.id, csvUrl);
     enLines = parseENTracker(new TextEncoder().encode(result.text).buffer);
-    if (!enLines.length) {
-      throw new Error('No VO lines found on this sheet tab. Check that the visible tab contains the EN tracker with a "VO ID" column.');
-    }
     enFileName = (tab.title || 'Google Sheet').replace(/ - Google (Sheets|表格)$/, '');
+    if (!enLines.length) {
+      showColMapPanel('en');
+      throw new Error('The sheet was fetched, but no VO lines were recognized (no "VO ID" column found). Fix: map the columns manually below, or check that the visible sheet tab is the EN tracker.');
+    }
     renderENMeta();
   } catch (err) {
     setError('generalError', err.message);
@@ -370,17 +418,12 @@ function handleTBFile(file) {
       const wb = XLSX.read(e.target.result, { type: 'array' });
       const ws = wb.Sheets[wb.SheetNames[0]];
       const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
-      termBaseMap = new Map(
+      const map = new Map(
         rows.slice(1)  // skip header row
           .map(r => [String(r[0] || '').trim(), String(r[1] || '').trim()])
           .filter(([cn]) => cn)
       );
-      tbZone.classList.add('has-file');
-      tbZone.querySelector('.upload-label').textContent = file.name;
-      tbZone.querySelector('.upload-icon').textContent = '✓';
-      const meta = document.getElementById('tbMeta');
-      meta.style.display = 'flex';
-      meta.innerHTML = `<span class="meta-chip gold">${termBaseMap.size} terms loaded</span><span class="meta-chip">${file.name}</span>`;
+      applyTermBase(map, file.name, true);
     } catch (err) {
       setError('glossaryError', 'Term base parse error: ' + err.message);
     }
@@ -388,42 +431,106 @@ function handleTBFile(file) {
   reader.readAsArrayBuffer(file);
 }
 
+/* Apply a term base to the UI; persist=true saves it to chrome.storage so it
+   survives closing the panel. */
+function applyTermBase(map, name, persist) {
+  termBaseMap = map;
+  tbZone.classList.add('has-file');
+  tbZone.querySelector('.upload-label').textContent = name;
+  tbZone.querySelector('.upload-icon').textContent = '✓';
+  const meta = document.getElementById('tbMeta');
+  meta.style.display = 'flex';
+  meta.innerHTML = `<span class="meta-chip gold">${termBaseMap.size} terms loaded</span><span class="meta-chip">${escapeHtml(name)}</span>`;
+  if (persist) {
+    chrome.storage.local.set({ termBase: [...termBaseMap.entries()], termBaseName: name });
+  }
+}
+
+/* Build a glossary reference block for a prompt, limited to terms that
+   actually appear in the given source text (saves tokens on large TBs). */
+function buildGlossaryRef(sourceText, maxTerms = 300) {
+  if (!termBaseMap.size) return '';
+  const relevant = [...termBaseMap.entries()]
+    .filter(([cn, en]) => sourceText.includes(cn) || (en && sourceText.includes(en)))
+    .slice(0, maxTerms);
+  if (!relevant.length) return '';
+  return `\n\nReference glossary — always use these established English translations:\n${relevant.map(([cn, en]) => `${cn} → ${en}`).join('\n')}`;
+}
+
 /* ================================================================
    PARSERS
    ================================================================ */
-function parseCNScript(arrayBuffer) {
+/* Fuzzy header matching: labels are compared case-, space- and
+   full-width-punctuation-insensitively, against synonym lists. */
+function normLabel(s) {
+  return String(s).toLowerCase().replace(/[\s_　（）()：:【】\[\]]/g, '');
+}
+
+function makeColResolver(headerRow) {
+  const exact = {}, fuzzy = {};
+  (headerRow || []).forEach((cell, j) => {
+    const label = String(cell).trim();
+    if (!label) return;
+    if (!(label in exact)) exact[label] = j;
+    const n = normLabel(label);
+    if (n && !(n in fuzzy)) fuzzy[n] = j;
+  });
+  return (labels, fallback) => {
+    for (const l of labels) if (l in exact) return exact[l];
+    for (const l of labels) {
+      const n = normLabel(l);
+      if (n in fuzzy) return fuzzy[n];
+    }
+    for (const l of labels) {
+      const n = normLabel(l);
+      if (n.length >= 3) {
+        const hit = Object.keys(fuzzy).find(k => k.includes(n));
+        if (hit !== undefined) return fuzzy[hit];
+      }
+    }
+    return fallback;
+  };
+}
+
+// Last-loaded raw rows, kept so the manual column-mapping panel can reparse.
+let lastCN = null; // { rows, sheetName }
+let lastEN = null; // { rows }
+
+function parseCNScript(arrayBuffer, overrides) {
   const wb = XLSX.read(arrayBuffer, { type: 'array' });
-  const sheetName = wb.SheetNames.find(n => n.includes('总台本')) || wb.SheetNames[0];
+  // Prefer the 总台本 sheet; otherwise take the sheet with the most rows.
+  let sheetName = wb.SheetNames.find(n => n.includes('总台本'));
+  if (!sheetName) {
+    sheetName = wb.SheetNames
+      .map(n => ({ n, rows: XLSX.utils.sheet_to_json(wb.Sheets[n], { header: 1 }).length }))
+      .sort((a, b) => b.rows - a.rows)[0].n;
+  }
   const ws = wb.Sheets[sheetName];
   const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
+  lastCN = { rows, sheetName };
+  return parseCNRows(rows, sheetName, overrides);
+}
 
-  // Locate the header row (the one whose cells include the label "PerformID").
-  let headerIdx = -1;
-  for (let i = 0; i < rows.length; i++) {
-    if (rows[i].some(cell => String(cell).trim() === 'PerformID')) { headerIdx = i; break; }
-  }
-  if (headerIdx === -1) {
-    for (let i = 0; i < rows.length; i++) {
-      if (rows[i].some(cell => String(cell).includes('PerformID'))) { headerIdx = i; break; }
+function parseCNRows(rows, sheetName, overrides = {}) {
+  const PID_LABELS = ['PerformID', '演出ID', '演出序号', 'PID'];
+  // Locate the header row: any row containing a PerformID-like label.
+  let headerIdx = overrides.headerIdx;
+  if (headerIdx == null) {
+    headerIdx = rows.findIndex(r =>
+      r.some(cell => PID_LABELS.some(l => normLabel(cell) === normLabel(l))));
+    if (headerIdx === -1) {
+      headerIdx = rows.findIndex(r =>
+        r.some(cell => normLabel(cell).includes('performid')));
     }
   }
-  if (headerIdx === -1) throw new Error('Could not find header row with PerformID');
+  if (headerIdx === -1) throw new Error('Could not find a header row with PerformID (or 演出ID).');
 
-  // Map column labels -> indices so we adapt to layouts where columns shift
-  // (e.g. the voiced 【配音部分】 sheet has an extra VOID column that pushes
-  // Textmap from C to D). Fall back to the documented positions if a label
-  // is missing.
-  const colMap = {};
-  rows[headerIdx].forEach((cell, j) => {
-    const label = String(cell).trim();
-    if (label && !(label in colMap)) colMap[label] = j;
-  });
-  const col = (label, fallback) => (label in colMap ? colMap[label] : fallback);
-  const cName    = col('Name', 1);
-  const cText    = col('Textmap', 2);
-  const cComment = col('Comment', 4);
-  const cPID     = col('PerformID', 7);
-  const cVOID    = col('VOID', col('音频序号（通用）', col('音频序号', 23)));
+  const resolve = makeColResolver(rows[headerIdx]);
+  const cName    = overrides.cName    ?? resolve(['Name', '角色', '角色名', 'Speaker', '说话人'], 1);
+  const cText    = overrides.cText    ?? resolve(['Textmap', '台词', '中文台词', '文本', '内容'], 2);
+  const cComment = overrides.cComment ?? resolve(['Comment', '备注', '注释'], 4);
+  const cPID     = overrides.cPID     ?? resolve(PID_LABELS, 7);
+  const cVOID    = overrides.cVOID    ?? resolve(['VOID', '音频序号（通用）', '音频序号', 'VoiceID', '音频ID'], 23);
 
   const get = (row, idx) =>
     String(idx != null && row[idx] != null ? row[idx] : '').trim();
@@ -497,38 +604,37 @@ function parseCNScript(arrayBuffer) {
   return scenes;
 }
 
-function parseENTracker(arrayBuffer) {
+function parseENTracker(arrayBuffer, overrides) {
   const wb = XLSX.read(arrayBuffer, { type: 'array' });
   const ws = wb.Sheets[wb.SheetNames[0]];
   const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
+  lastEN = { rows };
+  return parseENRows(rows, overrides);
+}
 
-  let headerIdx = -1;
-  for (let i = 0; i < rows.length; i++) {
-    if (rows[i].some(cell => String(cell).includes('VO ID'))) {
-      headerIdx = i;
-      break;
+function parseENRows(rows, overrides = {}) {
+  let headerIdx = overrides.headerIdx;
+  if (headerIdx == null) {
+    headerIdx = rows.findIndex(r => r.some(cell => String(cell).includes('VO ID')));
+    if (headerIdx === -1) {
+      headerIdx = rows.findIndex(r => {
+        const n = r.map(normLabel);
+        return n.includes('void') || n.includes('void通用') || n.includes('音频序号');
+      });
     }
   }
 
-  const colMap = {};
-  if (headerIdx !== -1) {
-    rows[headerIdx].forEach((cell, j) => {
-      const label = String(cell).trim();
-      if (label && !(label in colMap)) colMap[label] = j;
-    });
-  }
-  const col = (label, fallback) => (label in colMap ? colMap[label] : fallback);
+  const resolve = makeColResolver(headerIdx === -1 ? [] : rows[headerIdx]);
   const isValidVOID = val => val !== '' && !/^[一-鿿]/.test(val);
 
-  const cVoId  = col('VO ID', 1);
-  const cCharCHS = col('角色（中文）', col('CharCHS', 2));
-  const cChar  = col('Character', 3);
-  const cNotes = col('Performance Notes', col('性能备注', 8));
-  const cCN    = col('Chinese Script', col('中文台词', 9));
-  const cEN    = col('English Script', col('英文台词', 10));
-  const cLatestEN = col('Latest EN', col('最新英文', 19));
-  const cVOID  = col('VOID', col('音频序号（通用）', col('音频序号', 23)));
-  const cPID   = col('PerformID', 25);
+  const cVoId     = overrides.cVoId     ?? resolve(['VO ID'], 1);
+  const cCharCHS  = overrides.cCharCHS  ?? resolve(['角色（中文）', 'CharCHS', '角色'], 2);
+  const cChar     = overrides.cChar     ?? resolve(['Character'], 3);
+  const cNotes    = overrides.cNotes    ?? resolve(['Performance Notes', '性能备注', '演出备注'], 8);
+  const cCN       = overrides.cCN       ?? resolve(['Chinese Script', '中文台词', '中文'], 9);
+  const cEN       = overrides.cEN       ?? resolve(['English Script', '英文台词'], 10);
+  const cLatestEN = overrides.cLatestEN ?? resolve(['Latest EN', '最新英文'], 19);
+  const cPID      = overrides.cPID      ?? resolve(['PerformID', '演出ID'], 25);
 
   const lines = [];
   const start = headerIdx === -1 ? 1 : headerIdx + 1;
@@ -549,6 +655,83 @@ function parseENTracker(arrayBuffer) {
     });
   }
   return lines;
+}
+
+/* ================================================================
+   MANUAL COLUMN MAPPING (fallback when headers aren't recognized)
+   ================================================================ */
+function colLetter(j) {
+  let s = '';
+  j += 1;
+  while (j > 0) { s = String.fromCharCode(64 + ((j - 1) % 26) + 1) + s; j = Math.floor((j - 1) / 26); }
+  return s;
+}
+
+function hideColMap(kind) {
+  document.getElementById(kind === 'cn' ? 'cnColMap' : 'enColMap').style.display = 'none';
+}
+
+function showColMapPanel(kind) {
+  const data = kind === 'cn' ? lastCN : lastEN;
+  if (!data || !data.rows.length) return;
+  const panel = document.getElementById(kind === 'cn' ? 'cnColMap' : 'enColMap');
+
+  // Pick the most likely header row: the one with the most non-empty cells
+  // among the first 10 rows.
+  let hi = 0, best = -1;
+  for (let i = 0; i < Math.min(10, data.rows.length); i++) {
+    const c = data.rows[i].filter(x => String(x).trim()).length;
+    if (c > best) { best = c; hi = i; }
+  }
+  const header = data.rows[hi] || [];
+  const sample = data.rows[hi + 1] || [];
+  const ncols  = Math.max(header.length, sample.length);
+
+  let options = '<option value="">—</option>';
+  for (let j = 0; j < ncols; j++) {
+    const lbl = String(header[j] || '').trim() || String(sample[j] || '').trim().slice(0, 12) || '(empty)';
+    options += `<option value="${j}">${colLetter(j)}: ${escapeHtml(lbl)}</option>`;
+  }
+
+  const fields = kind === 'cn'
+    ? [['cPID', 'PerformID *'], ['cName', 'Speaker / Name'], ['cText', 'Dialogue / Text'], ['cVOID', 'VO ID'], ['cComment', 'Comment']]
+    : [['cVoId', 'VO ID *'], ['cChar', 'Character'], ['cCN', 'Chinese Script'], ['cEN', 'English Script'], ['cLatestEN', 'Latest EN']];
+
+  panel.innerHTML =
+    `<div class="colmap-title">Headers not recognized — map the columns manually (using row ${hi + 1} as header):</div>` +
+    fields.map(([k, l]) =>
+      `<div class="colmap-row"><label>${l}</label><select data-field="${k}">${options}</select></div>`).join('') +
+    `<div class="colmap-row"><button class="btn-teal btn-sm colmap-apply">Apply mapping</button></div>`;
+  panel.style.display = 'block';
+
+  panel.querySelector('.colmap-apply').addEventListener('click', () => {
+    const overrides = { headerIdx: hi };
+    panel.querySelectorAll('select[data-field]').forEach(s => {
+      if (s.value !== '') overrides[s.dataset.field] = Number(s.value);
+    });
+    try {
+      if (kind === 'cn') {
+        cnScenes = parseCNRows(lastCN.rows, lastCN.sheetName, overrides);
+        if (!cnScenes.length) throw new Error('Still no scenes with this mapping — check the PerformID column (it must contain numeric scene IDs).');
+        hideColMap('cn');
+        cnZone.classList.add('has-file');
+        cnZone.querySelector('.upload-label').textContent = cnFileName;
+        cnZone.querySelector('.upload-icon').textContent = '✓';
+        renderCNMeta();
+      } else {
+        enLines = parseENRows(lastEN.rows, overrides);
+        if (!enLines.length) throw new Error('Still no VO lines with this mapping — check the VO ID column.');
+        hideColMap('en');
+        enZone.classList.add('has-file');
+        enZone.querySelector('.upload-label').textContent = enFileName;
+        enZone.querySelector('.upload-icon').textContent = '✓';
+        renderENMeta();
+      }
+      setError('generalError', '');
+    } catch (e) {
+      setError('generalError', e.message);
+    }
+  });
 }
 
 /* ================================================================
@@ -708,12 +891,11 @@ Focus exclusively on: ${selectedOptions}.
 
 Output requirements:
 - Write entirely in English
-${styleRules}`;
+${styleRules}${buildGlossaryRef(digest)}`;
     } else if (enFromCN) {
       digest = buildScriptDigest(cnScenes);
-      const glossaryRef = termBaseMap.size > 0
-        ? `\n\nReference glossary — always use these established English translations:\n${[...termBaseMap.entries()].map(([cn, en]) => `${cn} → ${en}`).join('\n')}`
-        : '\n\nNote: no reference glossary is loaded, so name and term translations are provisional and may need unification later.';
+      const glossaryRef = buildGlossaryRef(digest)
+        || '\n\nNote: no reference glossary is loaded, so name and term translations are provisional and may need unification later.';
       systemPrompt = `You are a senior game localization producer and expert script analyst specializing in English voice-over production. The source script is in Chinese; no English translation exists yet. Write the analysis brief in English, translating names and terms as you go.
 
 Analyze the provided VO script digest and summarize the key content in approximately ${length} words.
@@ -774,7 +956,7 @@ document.getElementById('copyGeneral').addEventListener('click', () => {
 
 // Split a long digest into segments of roughly maxChars, breaking on
 // scene boundaries (=== markers) where possible, otherwise on newlines.
-function splitIntoSegments(digestText, maxChars = 6000) {
+function splitIntoSegments(digestText, maxChars = 9000) {
   const blocks = digestText.includes('=== ')
     ? digestText.split(/\n\n(?==== )/)
     : digestText.split('\n');
@@ -813,9 +995,7 @@ document.getElementById('generateComprehensive').addEventListener('click', async
       ? enLines.map(l => `[${l.voId}] ${l.character}: ${l.latestEN || l.englishScript}`).join('\n')
       : buildScriptDigest(cnScenes);
 
-    const glossaryRef = enFromCN && termBaseMap.size > 0
-      ? `\n\nReference glossary — always use these established English translations:\n${[...termBaseMap.entries()].map(([cn, en]) => `${cn} → ${en}`).join('\n')}`
-      : '';
+    const glossaryRef = usingEN ? buildGlossaryRef(digest) : '';
 
     // Stage 1: summarize each segment
     const segments = splitIntoSegments(digest);
@@ -957,44 +1137,70 @@ Output ONLY the data lines, no headers, no extra text.`;
     // Render after pass 1 (all scenes still shimmer)
     tableDiv.innerHTML = renderStructuredTable(structuredRows);
 
-    // Pass 2: story summary for all scenes
+    // Pass 2: story summaries — scenes are batched into a few calls
+    // (instead of one call per scene) to save tokens and avoid rate limits.
+    const sceneDigestOf = scene =>
+      `[PID:${scene.performId}] [${scene.type}] ${scene.description}\n` +
+      scene.lines.map(l => (l.hasVO ? '[VO]  ' : '      ') + l.speaker + ': ' + l.text).join('\n');
+
+    const batches = [];
+    let cur = [], curLen = 0;
+    for (const scene of cnScenes) {
+      const d = sceneDigestOf(scene);
+      if (cur.length && curLen + d.length > 8000) { batches.push(cur); cur = []; curLen = 0; }
+      cur.push({ scene, d });
+      curLen += d.length;
+    }
+    if (cur.length) batches.push(cur);
+
+    const sysP2 = `You will receive several scene blocks, each starting with [PID:xxx]. For EACH scene output exactly one pipe-delimited line:
+PID|summary
+The summary is ≤30 Chinese characters for a localization team, focusing on key emotional beats and story developments. Output ONLY the data lines, one per scene, no headers, no extra text.`;
+
     let consecutiveFailures = 0;
-    for (let si = 0; si < cnScenes.length; si++) {
-      const scene = cnScenes[si];
-      structProgress.textContent = `Summarizing scene ${si + 1}/${cnScenes.length}…`;
-      const voCount = scene.lines.filter(l => l.hasVO).length;
-      const idx = structuredRows.findIndex(r => r.performId === scene.performId);
-
-      const sceneDigest = `[PID:${scene.performId}] [${scene.type}] ${scene.description}\n` +
-        scene.lines.map(l => (l.hasVO ? '[VO]  ' : '      ') + l.speaker + ': ' + l.text).join('\n');
-
-      const sysP2 = `Summarize this scene in ≤30 Chinese characters for a localization team. Focus on key emotional beats and story developments. Return ONLY the summary, no extra text.`;
-
+    let done = 0;
+    for (let bi = 0; bi < batches.length; bi++) {
+      const batch = batches[bi];
+      structProgress.textContent = `Summarizing scenes ${done + 1}–${done + batch.length}/${cnScenes.length}…`;
+      const input = batch.map(b => b.d).join('\n\n');
       try {
-        let summary;
+        let raw;
         try {
-          summary = await callClaude(sysP2, sceneDigest);
+          raw = await callClaude(sysP2, input);
         } catch (e1) {
-          // One retry after a pause — per-scene calls often trip the rate limit
           if (!/429|Rate limit|overloaded/i.test(e1.message)) throw e1;
-          structProgress.textContent = `Rate limited — pausing 30s, then retrying scene ${si + 1}/${cnScenes.length}…`;
+          structProgress.textContent = `Rate limited — pausing 30s, then retrying batch ${bi + 1}/${batches.length}…`;
           await new Promise(r => setTimeout(r, 30000));
-          structProgress.textContent = `Summarizing scene ${si + 1}/${cnScenes.length}…`;
-          summary = await callClaude(sysP2, sceneDigest);
+          raw = await callClaude(sysP2, input);
         }
         consecutiveFailures = 0;
-        const label = voCount === 0 ? '【无配音场景】' : '';
-        if (idx !== -1) structuredRows[idx].storySummary = label + summary.trim();
+        const sumMap = {};
+        raw.split('\n').forEach(line => {
+          const [pid, ...rest] = parsePipeRow(line);
+          if (pid && rest.length) sumMap[pid.replace(/^\[?PID:?/i, '').replace(/\]$/, '').trim()] = rest.join('|').trim();
+        });
+        for (const { scene } of batch) {
+          const idx = structuredRows.findIndex(r => r.performId === scene.performId);
+          if (idx === -1) continue;
+          const voCount = scene.lines.filter(l => l.hasVO).length;
+          const label = voCount === 0 ? '【无配音场景】' : '';
+          const summary = sumMap[scene.performId];
+          structuredRows[idx].storySummary = summary
+            ? label + summary
+            : '⚠ No summary returned for this scene';
+        }
       } catch (e) {
         consecutiveFailures++;
-        if (idx !== -1) structuredRows[idx].storySummary = '⚠ ' + e.message;
-        if (consecutiveFailures >= 3) {
+        for (const { scene } of batch) {
+          const idx = structuredRows.findIndex(r => r.performId === scene.performId);
+          if (idx !== -1) structuredRows[idx].storySummary = '⚠ ' + e.message;
+        }
+        if (consecutiveFailures >= 2) {
           tableDiv.innerHTML = renderStructuredTable(structuredRows);
-          throw new Error(`Stopped after 3 consecutive failed scenes. Last error: ${e.message}`);
+          throw new Error(`Stopped after ${consecutiveFailures} consecutive failed batches. Last error: ${e.message}`);
         }
       }
-
-      // Re-render progressively
+      done += batch.length;
       tableDiv.innerHTML = renderStructuredTable(structuredRows);
     }
 
@@ -1205,27 +1411,11 @@ document.getElementById('runConsistency').addEventListener('click', async () => 
       const { name, gid } = numberedTabs[i];
       progress.textContent = `Fetching tab ${i + 1}/${numberedTabs.length}: ${name}…`;
       const url = `https://docs.google.com/spreadsheets/d/${sheetId}/export?format=csv&gid=${gid}`;
-      let csvResult;
+      let res;
       try {
-        csvResult = await chrome.scripting.executeScript({
-          target: { tabId: tab.id },
-          func: async (csvUrl) => {
-            const r = await fetch(csvUrl, { credentials: 'include' });
-            if (!r.ok) return { ok: false, status: r.status };
-            const text = await r.text();
-            if (/^\s*<(!DOCTYPE|html)/i.test(text)) return { ok: false, status: 401 };
-            return { ok: true, text };
-          },
-          args: [url],
-        });
+        res = await fetchInSheetTab(tab.id, url);
       } catch (e) {
         progress.textContent = `Skipping "${name}": ${e.message}`;
-        await new Promise(r => setTimeout(r, 600));
-        continue;
-      }
-      const res = csvResult[0]?.result;
-      if (!res?.ok) {
-        progress.textContent = `Skipping "${name}" (HTTP ${res?.status ?? '?'})`;
         await new Promise(r => setTimeout(r, 600));
         continue;
       }
@@ -1288,9 +1478,9 @@ document.getElementById('runConsistency').addEventListener('click', async () => 
     }
 
     const pairsText = allPairs.slice(0, 800).join('\n');
-    const tbRef = termBaseMap.size > 0
-      ? `\n\nEstablished glossary (authoritative — flag any row deviating from these):\n${[...termBaseMap.entries()].map(([cn, en]) => `${cn} → ${en}`).join('\n')}`
-      : '';
+    const tbRef = buildGlossaryRef(pairsText)
+      .replace('Reference glossary — always use these established English translations:',
+               'Established glossary (authoritative — flag any row deviating from these):');
     const directHint = directConflicts.length
       ? `\n\nPre-detected exact-match conflicts (definitely include these):\n${directConflicts.map(c => `· ${c.cn}: ${c.variants.join(' | ')}`).join('\n')}`
       : '';

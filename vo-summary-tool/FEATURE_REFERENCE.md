@@ -21,7 +21,7 @@ Parsed by `parseCNScript(arrayBuffer)`. Supports two sheet layouts:
 - If the header has no `VOID` → multi-line GAL scene; dialogue continues until the next scene header.
 
 **Column resolution** (both layouts)  
-Columns are found by label first, with numeric fallbacks if the label is absent:
+Columns are found by exact label first, then by fuzzy matching (case-, space- and full-width-punctuation-insensitive, with CN/EN synonyms such as 角色/Speaker, 台词/Textmap, 演出ID/PerformID), with numeric fallbacks if nothing matches. If the header row cannot be found at all — or parsing yields 0 scenes/lines — a **manual column-mapping panel** appears under the upload zone: it guesses the header row (the densest of the first 10 rows), lists each column as `A: label`, and lets you assign the required fields, then reparses.
 
 | Field | Labels searched | Fallback col |
 |---|---|---|
@@ -70,17 +70,19 @@ Each parsed line is:
 
 ### Term Base (`.xlsx` upload)
 
-Read from the Glossary tab. Column A = CN term, Column B = EN translation.  
-Stored as `termBaseMap: Map<cnTerm, enTerm>`. Used in:
+Read from the first sheet. Column A = CN term, Column B = EN translation.  
+Stored as `termBaseMap: Map<cnTerm, enTerm>` and **persisted in `chrome.storage.local`** — it survives closing the panel and is restored automatically on open. Used in:
 - Glossary extraction (CN keys excluded from extracted terms; filtered from results)
-- CN → EN summary generation (appended as a reference glossary in the prompt)
+- All English summary/analysis generation (Summary and Comprehensive, with or without an EN tracker)
 - Consistency Check (used as authoritative translations; deviations flagged first)
+
+To save tokens, only glossary entries whose CN or EN term actually appears in the source text are injected into a prompt (capped at 300 entries).
 
 ---
 
 ### Google Sheets Scan
 
-Because the side panel page is blocked by CORS when fetching `docs.google.com` directly, all Google Sheets access uses `chrome.scripting.executeScript` to run fetch calls inside the active Sheets tab. The tab's own session cookies are used, so the user must be logged in to Google.
+Because the side panel page is blocked by CORS when fetching `docs.google.com` directly, all Google Sheets access uses `chrome.scripting.executeScript` to run fetch calls inside the active Sheets tab (shared helper `fetchInSheetTab`). The tab's own session cookies are used, so the user must be logged in to Google. Network errors are caught inside the injected script, and every failure mode (blocked injection, closed tab, sign-in redirect, 401/403/404) maps to a specific message with a fix.
 
 The Scan button in the Summary tab fetches only the currently active sheet tab (`gid` read from the URL hash).
 
@@ -135,7 +137,7 @@ Two-stage map-reduce. More thorough but slower — makes multiple Claude calls.
 
 ### Stage 1 — Segment summaries
 
-Input digest is split into segments of ~6 000 characters, breaking on `\n\n=== ` (scene boundaries) where possible.
+Input digest is split into segments of ~9 000 characters, breaking on `\n\n=== ` (scene boundaries) where possible.
 
 For each segment: 1 Claude call.
 
@@ -174,9 +176,9 @@ Full script digest sent to Claude.
 
 Result is a `pid → shortDesc` map.
 
-### Pass 2 — Story summaries (1 call per scene)
+### Pass 2 — Story summaries (batched)
 
-For each scene, sends:
+Scenes are grouped into batches of ~8 000 characters and each batch is sent in ONE call (instead of one call per scene — far fewer tokens and rate-limit hits). Each scene block is:
 ```
 [PID:xxx] [type] description
 [VO]  Speaker: line
@@ -184,11 +186,11 @@ For each scene, sends:
 ```
 
 **Prompt**:
-> Summarize this scene in ≤30 Chinese characters for a localization team. Focus on key emotional beats and story developments. Return ONLY the summary, no extra text.
+> For EACH scene output exactly one pipe-delimited line: `PID|summary`. The summary is ≤30 Chinese characters for a localization team, focusing on key emotional beats and story developments. Output ONLY the data lines.
 
 Scenes with zero VO lines are prefixed `【无配音场景】`.
 
-**Error handling**: if a call hits a 429 / rate-limit, the tool waits 30 seconds and retries once. If 3 scenes fail consecutively, the table stops and reports the last error. Real error text is shown per row instead of "(error)".
+**Error handling**: if a batch hits a 429 / rate-limit, the tool waits 30 seconds and retries once. If 2 batches fail consecutively, the table stops and reports the last error. Real error text is shown per row.
 
 **Table columns** (toggleable via Cols pills): PerformID · 类型 · 场景描述 · 台词 · VO · 故事总结.  
 Column widths are resizable (CSS `resize: horizontal` on `<th>`). Text wraps in cells.

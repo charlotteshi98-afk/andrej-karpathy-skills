@@ -12,11 +12,12 @@
 <body>
 <div id="app">
 
-  <!-- HEADER -->
-  <div class="header">
-    <div class="header-left">
-      <span class="vo-badge">VO</span>
-    </div>
+  <!-- TOP BAR: API key + font size + collapse -->
+  <div class="api-bar">
+    <input type="password" id="apiKeyInput" placeholder="Anthropic API key (sk-ant-…)" autocomplete="off" />
+    <button id="saveApiKey" class="btn-teal btn-sm">Save</button>
+    <span id="apiKeyStatus" class="key-status"></span>
+    <button id="changeApiKey" class="btn-copy" style="display:none">Key</button>
     <div class="font-size-toggle">
       <button class="fsz-btn" data-size="11">S</button>
       <button class="fsz-btn active" data-size="13">M</button>
@@ -25,25 +26,19 @@
     <button id="toggleCollapse" class="collapse-btn">−</button>
   </div>
 
-  <!-- API KEY BAR -->
-  <div class="api-bar">
-    <input type="password" id="apiKeyInput" placeholder="Anthropic API key (sk-ant-…)" autocomplete="off" />
-    <button id="saveApiKey" class="btn-teal btn-sm">Save</button>
-    <span id="apiKeyStatus" class="key-status"></span>
-  </div>
-
   <!-- COLLAPSIBLE BODY -->
   <div id="mainBody">
 
     <!-- CN UPLOAD ZONE -->
-    <div class="upload-zone" id="cnUploadZone">
+    <div class="upload-zone upload-zone-sm" id="cnUploadZone">
       <div class="upload-inner">
         <div class="upload-icon">↑</div>
-        <div class="upload-label">Drop CN master script (.xlsx) here or click to upload</div>
+        <div class="upload-label">CN master script (.xlsx) — drop or click</div>
         <input type="file" id="cnFileInput" accept=".xlsx" style="display:none" />
       </div>
     </div>
     <div id="cnMeta" class="meta-chips" style="display:none"></div>
+    <div id="cnColMap" class="colmap-panel" style="display:none"></div>
 
     <!-- TABS -->
     <div class="tabs">
@@ -78,11 +73,12 @@
         <div class="upload-zone upload-zone-sm" id="enUploadZone">
           <div class="upload-inner">
             <div class="upload-icon">↑</div>
-            <div class="upload-label">…or drop EN VO tracker (.xlsx) here / click to upload</div>
+            <div class="upload-label">…or EN VO tracker (.xlsx) — drop or click</div>
             <input type="file" id="enFileInput" accept=".xlsx" style="display:none" />
           </div>
         </div>
         <div id="enMeta" class="meta-chips" style="display:none"></div>
+        <div id="enColMap" class="colmap-panel" style="display:none"></div>
       </div>
       <div class="pill-row" id="summaryOptions">
         <button class="pill active" data-opt="characters">Characters &amp; relationships</button>
