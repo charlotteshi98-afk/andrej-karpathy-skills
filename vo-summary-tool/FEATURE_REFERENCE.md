@@ -84,9 +84,9 @@ To save tokens, only glossary entries whose CN or EN term actually appears in th
 
 Because the side panel page is blocked by CORS when fetching `docs.google.com` directly, all Google Sheets access uses `chrome.scripting.executeScript` to run fetch calls inside the active Sheets tab (shared helpers `fetchSheetCsv` → `fetchInSheetTab`). The tab's own session cookies are used, so the user must be logged in to Google.
 
-Two CSV endpoints are tried in order:
-1. `…/gviz/tq?tqx=out:csv&gid=N` — same-origin, no redirect (preferred; the plain export URL redirects to `googleusercontent.com`, which the Sheets page's security policy blocks, causing "Failed to fetch")
-2. `…/export?format=csv&gid=N` — fallback
+Two CSV endpoints (`…/gviz/tq?tqx=out:csv&gid=N`, then `…/export?format=csv&gid=N`) are each tried over two transports, first success wins:
+1. Background service-worker fetch — uses the extension's `host_permissions` (including `*.googleusercontent.com` for the export redirect), immune to the Sheets page's CSP
+2. Fetch injected into the Sheets tab — always carries the page's cookies, but subject to the page's own security policy
 
 Network errors are caught inside the injected script, and every failure mode (blocked injection, closed tab, sign-in redirect, 401/403/404) maps to a specific message with a fix.
 
@@ -195,6 +195,12 @@ Scenes are grouped into batches of ~8 000 characters and each batch is sent in O
 > For EACH scene output exactly one pipe-delimited line: `PID|summary`. The summary is ≤30 Chinese characters (中文 mode) or ≤20 English words (English mode) for a localization team, focusing on key emotional beats and story developments. Output ONLY the data lines.
 
 A 中文/English toggle next to Generate Table selects the output language for both the short descriptions (pass 1) and story summaries (pass 2). In English mode the reference glossary (if loaded) is injected into both prompts. Scenes with zero VO lines are prefixed `【无配音场景】` (or `[No VO]` in English mode).
+
+### Story roadmap (pass 1b)
+Between the two passes, one extra call groups the scenes into 3–6 sequential acts, each with a short title and a one-sentence milestone beat (`ACT|n|title|beat|PID1,PID2,…`). The table renders each act as a highlighted band row above its scenes, so it reads top-down like a story roadmap. If this call fails, the plain table still renders. The act label (`第2幕 · 转折` / `Act 2 · …`) is also added as a `幕` column to CSV/TSV exports and the archive copy.
+
+### Copy for Tracker
+A **Copy for Tracker** export button copies a two-column TSV (`PerformID`, `剧情备注` / `Story context`) where each row is `act label | scene summary`, keyed by PerformID — paste it into the recording tracker as a story-context column so directors can follow the roadmap next to each line during sessions.
 
 **Error handling**: if a batch hits a 429 / rate-limit, the tool waits 30 seconds and retries once. If 2 batches fail consecutively, the table stops and reports the last error. Real error text is shown per row.
 

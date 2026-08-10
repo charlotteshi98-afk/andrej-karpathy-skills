@@ -14,6 +14,7 @@ let termBaseMap = new Map(); // CN term → EN term
 
 /* ── Structured table data store ────────────────────────────── */
 let structuredRows = [];  // [{performId, type, description, lineCount, voCount, storySummary}]
+let structuredActs = [];  // [{n, title, beat, pids: [performId,…]}] — story roadmap grouping
 let structuredCols = [0,1,2,3,4,5];
 let archives = [];
 
@@ -319,11 +320,15 @@ function renderENMeta() {
   `;
 }
 
-/* ── Fetch sheet CSV from inside the Google Sheets tab ──
-   Tries the same-origin gviz endpoint first: the plain export URL
-   redirects to googleusercontent.com, which the Sheets page's own
-   security policy blocks ("Failed to fetch"). Falls back to the
-   export URL in case gviz is unavailable. */
+/* ── Fetch sheet CSV, trying every transport that can work ──
+   Two URLs (same-origin gviz endpoint, then the export endpoint) crossed
+   with two transports:
+   1. Background service worker fetch — uses the extension's
+      host_permissions, immune to the Sheets page's CSP, but relies on
+      Google auth cookies being sent from the extension context.
+   2. Fetch injected into the Sheets tab — always has the page's cookies,
+      but subject to the page's own security policy.
+   Returns the first success; throws the last error otherwise. */
 async function fetchSheetCsv(tabId, sheetId, gid) {
   const urls = [
     `https://docs.google.com/spreadsheets/d/${sheetId}/gviz/tq?tqx=out:csv&gid=${gid}`,
@@ -332,12 +337,30 @@ async function fetchSheetCsv(tabId, sheetId, gid) {
   let lastErr;
   for (const url of urls) {
     try {
+      return await fetchViaBackground(url);
+    } catch (e) {
+      lastErr = e;
+    }
+    try {
       return await fetchInSheetTab(tabId, url);
     } catch (e) {
       lastErr = e;
     }
   }
   throw lastErr;
+}
+
+/* ── Fetch via the background service worker ── */
+async function fetchViaBackground(url) {
+  const result = await chrome.runtime.sendMessage({ type: 'fetchSheetCsv', url });
+  if (!result) throw new Error('Background fetch did not respond. Fix: reload the extension at chrome://extensions.');
+  if (result.ok) return result;
+  if (result.error) throw new Error(`Network error while fetching sheet data: ${result.error}. Fix: check your connection.`);
+  if (result.status === 401 || result.status === 403) {
+    throw new Error(`Google denied access to this sheet (HTTP ${result.status}). Fix: sign in to Google in this browser with an account that can open the sheet, then try again.`);
+  }
+  if (result.status === 404) throw new Error('Sheet not found (HTTP 404). Fix: check the sheet still exists and the tab URL is correct.');
+  throw new Error(`Could not read sheet data (HTTP ${result.status ?? '?'}). Fix: reload the sheet tab, then try again.`);
 }
 
 /* ── Fetch a URL from inside the Google Sheets tab (avoids CORS) ──
@@ -1154,6 +1177,7 @@ document.getElementById('generateStructured').addEventListener('click', async ()
   outputArea.style.display = 'block';
   document.getElementById('structuredExportBtns').style.display = 'none';
   structuredRows = [];
+  structuredActs = [];
 
   // Render skeleton table
   tableDiv.innerHTML = renderStructuredTable(cnScenes.map(s => ({
@@ -1201,6 +1225,30 @@ Output ONLY the data lines, no headers, no extra text.${structGlossary}`;
     }));
 
     // Render after pass 1 (all scenes still shimmer)
+    tableDiv.innerHTML = renderStructuredTable(structuredRows);
+
+    // Pass 1b: story roadmap — group scenes into acts with a milestone beat
+    structProgress.textContent = 'Mapping story acts…';
+    await pauseStructured.wait(structProgress);
+    const sysActs = `You are a game localization producer building a story roadmap of a VO script.
+Group the scenes (marked === 场景N [PID:xxx] ===) into 3–6 sequential story acts/arcs, keeping scenes in script order.
+For each act output one pipe-delimited line:
+ACT|number|title|beat|PID1,PID2,PID3
+${useEN
+    ? 'title is ≤5 English words; beat is one English sentence (≤15 words) stating the milestone this act reaches.'
+    : 'title 不超过8个汉字；beat 是一句不超过20个汉字的话，说明这一幕推进到的剧情节点。'}
+Every PID must appear in exactly one act. Output ONLY the ACT lines, no headers, no extra text.${structGlossary}`;
+    try {
+      const actsText = await callClaude(sysActs, digest);
+      structuredActs = [];
+      actsText.split('\n').forEach(line => {
+        const parts = line.split('|').map(p => p.trim());
+        if (parts[0] !== 'ACT' || parts.length < 5) return;
+        structuredActs.push({ n: parts[1], title: parts[2], beat: parts[3], pids: parts[4].split(',').map(p => p.trim()).filter(Boolean) });
+      });
+    } catch (e) {
+      structuredActs = [];   // roadmap is an enhancement — table still works without it
+    }
     tableDiv.innerHTML = renderStructuredTable(structuredRows);
 
     // Pass 2: story summaries — scenes are batched into a few calls
@@ -1276,9 +1324,9 @@ Output ONLY the data lines, one per scene, no headers, no extra text.${structGlo
 
     document.getElementById('structuredExportBtns').style.display = 'flex';
     const tsvRows = structuredRows.map(r =>
-      [r.performId, r.type, r.description, r.lineCount, r.voCount, r.storySummary || ''].join('\t')
+      [r.performId, actLabelOf(r.performId), r.type, r.description, r.lineCount, r.voCount, r.storySummary || ''].join('\t')
     );
-    const tsvContent = ['PerformID\t类型\t场景描述\t台词数\tVO数\t故事总结', ...tsvRows].join('\n');
+    const tsvContent = ['PerformID\t幕\t类型\t场景描述\t台词数\tVO数\t故事总结', ...tsvRows].join('\n');
     document.getElementById('saveStructuredToArchive').style.display = '';
     document.getElementById('saveStructuredToArchive').onclick = () => {
       saveToArchive('Structured', `${cnFileName} — Scene Breakdown`, tsvContent);
@@ -1297,7 +1345,7 @@ function renderStructuredTable(rows) {
   const ths = allHeaders
     .filter((_, i) => structuredCols.includes(i))
     .map(h => `<th>${h}</th>`).join('');
-  const trs = rows.map(r => {
+  const renderRow = (r) => {
     const summaryCell = r.storySummary === null
       ? `<span class="shimmer">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span>`
       : escapeHtml(r.storySummary);
@@ -1311,7 +1359,27 @@ function renderStructuredTable(rows) {
     ];
     const cells = allCells.filter((_, i) => structuredCols.includes(i)).join('');
     return `<tr>${cells}</tr>`;
-  }).join('');
+  };
+  const colCount = structuredCols.length || 1;
+  let trs;
+  if (structuredActs.length) {
+    const rowByPid = new Map(rows.map(r => [r.performId, r]));
+    const placed = new Set();
+    const parts = [];
+    structuredActs.forEach(act => {
+      const label = /^\d+$/.test(act.n) ? (typeof structuredLang !== 'undefined' && structuredLang === 'en' ? `Act ${act.n}` : `第${act.n}幕`) : act.n;
+      parts.push(`<tr class="act-row"><td colspan="${colCount}">▸ ${escapeHtml(label)} · ${escapeHtml(act.title)}<span class="act-beat"> — ${escapeHtml(act.beat)}</span></td></tr>`);
+      act.pids.forEach(pid => {
+        const r = rowByPid.get(pid);
+        if (r && !placed.has(pid)) { placed.add(pid); parts.push(renderRow(r)); }
+      });
+    });
+    const leftover = rows.filter(r => !placed.has(r.performId));
+    if (leftover.length) parts.push(...leftover.map(renderRow));
+    trs = parts.join('');
+  } else {
+    trs = rows.map(renderRow).join('');
+  }
   return `<table class="data-table"><thead><tr>${ths}</tr></thead><tbody>${trs}</tbody></table>`;
 }
 
@@ -1319,18 +1387,45 @@ function renderStructuredTable(rows) {
 document.getElementById('exportCsv').addEventListener('click', () => exportStructured('csv'));
 document.getElementById('exportTsv').addEventListener('click', () => exportStructured('tsv'));
 
+/* "第2幕 · 决裂" / "Act 2 · The Break" for a scene, '' if no roadmap */
+function actLabelOf(performId) {
+  const act = structuredActs.find(a => a.pids.includes(performId));
+  if (!act) return '';
+  const en = structuredLang === 'en';
+  const num = /^\d+$/.test(act.n) ? (en ? `Act ${act.n}` : `第${act.n}幕`) : act.n;
+  return `${num} · ${act.title}`;
+}
+
 function exportStructured(fmt) {
   const sep = fmt === 'csv' ? ',' : '\t';
-  const headers = ['PerformID', '类型', '场景描述', '台词数', 'VO数', '故事总结'];
+  const headers = ['PerformID', '幕', '类型', '场景描述', '台词数', 'VO数', '故事总结'];
   const csvEsc  = (v) => fmt === 'csv' ? `"${String(v).replace(/"/g, '""')}"` : String(v);
   const rows    = [headers.map(csvEsc).join(sep)];
   structuredRows.forEach(r => {
-    rows.push([r.performId, r.type, r.description, r.lineCount, r.voCount, r.storySummary || ''].map(csvEsc).join(sep));
+    rows.push([r.performId, actLabelOf(r.performId), r.type, r.description, r.lineCount, r.voCount, r.storySummary || ''].map(csvEsc).join(sep));
   });
   const BOM  = '﻿';
   const blob = new Blob([BOM + rows.join('\n')], { type: 'text/plain;charset=utf-8' });
   downloadBlob(blob, `${baseName(cnFileName)}_structured.${fmt}`);
 }
+
+/* ── Copy for Tracker: PerformID-keyed story context, TSV ──────
+   Paste into the recording tracker as a "story context" column so
+   directors read the roadmap next to each line. */
+document.getElementById('copyTracker').addEventListener('click', async (e) => {
+  const en = structuredLang === 'en';
+  const lines = [(en ? 'PerformID\tStory context' : 'PerformID\t剧情备注')];
+  structuredRows.forEach(r => {
+    const act = actLabelOf(r.performId);
+    const ctx = [act, r.storySummary || ''].filter(Boolean).join(' | ');
+    lines.push(`${r.performId}\t${ctx}`);
+  });
+  await navigator.clipboard.writeText(lines.join('\n'));
+  const btn = e.currentTarget;
+  const old = btn.textContent;
+  btn.textContent = 'Copied ✓';
+  setTimeout(() => { btn.textContent = old; }, 1500);
+});
 
 /* ================================================================
    FEATURE 3 — GLOSSARY

@@ -430,6 +430,19 @@ button { cursor: pointer; font-family: 'Noto Sans SC', sans-serif; }
 .progress-row:has(.progress-note[style*="block"]) { margin-bottom: 10px; }
 .pause-btn { flex-shrink: 0; }
 
+/* Story roadmap act bands in the structured table */
+.act-row td {
+  background: color-mix(in srgb, var(--accent) 12%, var(--bg));
+  color: var(--accent);
+  font-weight: 700;
+  font-size: 11px;
+  border-top: 1px solid var(--accent);
+}
+.act-row .act-beat {
+  font-weight: 400;
+  color: var(--accent2);
+}
+
 /* ─── Error ──────────────────────────────────────────────────────────────── */
 .error-msg {
   background: rgba(220,38,38,0.07);
