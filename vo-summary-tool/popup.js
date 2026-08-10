@@ -52,6 +52,7 @@ document.querySelectorAll('.fsz-btn').forEach(btn => {
     btn.classList.add('active');
     document.documentElement.style.setProperty('--output-font-size', size + 'px');
     chrome.storage.local.set({ fontSize: size });
+    requestAnimationFrame(autoResizeAllOutputs);
   });
 });
 
@@ -904,9 +905,16 @@ function typeBadge(type) {
 }
 
 function autoResize(textarea) {
+  if (!textarea) return;
   textarea.style.height = 'auto';
   textarea.style.height = textarea.scrollHeight + 'px';
 }
+
+/* Re-fit every output box — content height changes with font size and width. */
+function autoResizeAllOutputs() {
+  document.querySelectorAll('.output-text').forEach(autoResize);
+}
+window.addEventListener('resize', autoResizeAllOutputs);
 
 function escapeHtml(str) {
   return String(str)
@@ -1162,11 +1170,16 @@ ${langLine}
 /* ================================================================
    FEATURE 2 — STRUCTURED TABLE
    ================================================================ */
-document.getElementById('generateStructured').addEventListener('click', async () => {
+document.getElementById('generateStructured').addEventListener('click', () => runStructured(false));
+document.getElementById('generateRoadmap').addEventListener('click', () => runStructured(true));
+
+/* withRoadmap=false → plain scene table.
+   withRoadmap=true  → same table grouped under story-act band rows. */
+async function runStructured(withRoadmap) {
   if (!cnScenes.length) { setError('structuredError', 'Please upload a CN script first.'); return; }
   setError('structuredError', '');
 
-  const btn = document.getElementById('generateStructured');
+  const btn = document.getElementById(withRoadmap ? 'generateRoadmap' : 'generateStructured');
   const structProgress = document.getElementById('structuredProgress');
   setBusy(btn, true);
   structProgress.textContent = 'Analyzing scenes…';
@@ -1201,17 +1214,36 @@ document.getElementById('generateStructured').addEventListener('click', async ()
 For each scene (marked === 场景N [PID:xxx] ===), output one pipe-delimited line:
 PerformID|ShortDescription
 ${useEN
-    ? 'ShortDescription should be ≤8 English words summarizing what happens. The script is in Chinese; write the descriptions in English.'
+    ? 'ShortDescription must be ≤8 words in ENGLISH summarizing what happens. The script and its scene descriptions are in Chinese: TRANSLATE them, never copy Chinese text through. Every ShortDescription must contain only English — no Chinese characters, even for names not in the glossary (romanize those).'
     : 'ShortDescription should be ≤12 Chinese characters summarizing what happens.'}
+Output one line for EVERY scene given, including scenes with no dialogue — never skip a scene.
 Output ONLY the data lines, no headers, no extra text.${structGlossary}`;
 
     await pauseStructured.wait(structProgress);
     const pass1Text = await callClaude(systemP1, digest);
     const descMap = {};
-    pass1Text.split('\n').forEach(line => {
+    const collectDescs = (text) => text.split('\n').forEach(line => {
       const [pid, desc] = parsePipeRow(line);
-      if (pid && desc) descMap[pid.trim()] = desc.trim();
+      if (pid && desc) descMap[pid.replace(/^\[?PID:?/i, '').replace(/\]$/, '').trim()] = desc.trim();
     });
+    collectDescs(pass1Text);
+
+    /* Scenes the model skipped would otherwise fall back to the raw Chinese
+       description — visibly untranslated in English mode. Retry just those,
+       in chunks, before giving up on them. */
+    let missing = cnScenes.filter(s => !descMap[s.performId]);
+    for (let attempt = 0; attempt < 2 && missing.length; attempt++) {
+      structProgress.textContent = `Describing ${missing.length} remaining scene${missing.length > 1 ? 's' : ''}…`;
+      await pauseStructured.wait(structProgress);
+      const chunks = [];
+      for (let i = 0; i < missing.length; i += 40) chunks.push(missing.slice(i, i + 40));
+      for (const chunk of chunks) {
+        try {
+          collectDescs(await callClaude(systemP1, buildScriptDigest(chunk)));
+        } catch (e) { /* keep whatever we have; loop re-checks below */ }
+      }
+      missing = cnScenes.filter(s => !descMap[s.performId]);
+    }
 
     // Build base rows
     structuredRows = cnScenes.map(s => ({
@@ -1228,6 +1260,7 @@ Output ONLY the data lines, no headers, no extra text.${structGlossary}`;
     tableDiv.innerHTML = renderStructuredTable(structuredRows);
 
     // Pass 1b: story roadmap — group scenes into acts with a milestone beat
+    if (withRoadmap) {
     structProgress.textContent = 'Mapping story acts…';
     await pauseStructured.wait(structProgress);
     const sysActs = `You are a game localization producer building a story roadmap of a VO script.
@@ -1250,6 +1283,7 @@ Every PID must appear in exactly one act. Output ONLY the ACT lines, no headers,
       structuredActs = [];   // roadmap is an enhancement — table still works without it
     }
     tableDiv.innerHTML = renderStructuredTable(structuredRows);
+    }
 
     // Pass 2: story summaries — scenes are batched into a few calls
     // (instead of one call per scene) to save tokens and avoid rate limits.
@@ -1270,7 +1304,7 @@ Every PID must appear in exactly one act. Output ONLY the ACT lines, no headers,
     const sysP2 = `You will receive several scene blocks, each starting with [PID:xxx]. For EACH scene output exactly one pipe-delimited line:
 PID|summary
 ${useEN
-    ? 'The summary is ≤20 English words for a localization team, focusing on key emotional beats and story developments. The scenes are in Chinese; write the summaries in English.'
+    ? 'The summary is ≤20 words in ENGLISH for a localization team, focusing on key emotional beats and story developments. The scenes are in Chinese: TRANSLATE, never copy Chinese text through — summaries must contain no Chinese characters.'
     : 'The summary is ≤30 Chinese characters for a localization team, focusing on key emotional beats and story developments.'}
 Output ONLY the data lines, one per scene, no headers, no extra text.${structGlossary}`;
 
@@ -1324,7 +1358,7 @@ Output ONLY the data lines, one per scene, no headers, no extra text.${structGlo
 
     document.getElementById('structuredExportBtns').style.display = 'flex';
     const tsvRows = structuredRows.map(r =>
-      [r.performId, actLabelOf(r.performId), r.type, r.description, r.lineCount, r.voCount, r.storySummary || ''].join('\t')
+      [r.performId, actLabelOf(r.performId), r.type, sceneDescOf(r), r.lineCount, r.voCount, r.storySummary || ''].join('\t')
     );
     const tsvContent = ['PerformID\t幕\t类型\t场景描述\t台词数\tVO数\t故事总结', ...tsvRows].join('\n');
     document.getElementById('saveStructuredToArchive').style.display = '';
@@ -1338,7 +1372,7 @@ Output ONLY the data lines, one per scene, no headers, no extra text.${structGlo
     pauseStructured.hide();
     setBusy(btn, false);
   }
-});
+}
 
 function renderStructuredTable(rows) {
   const allHeaders = ['PerformID', '类型', '场景描述', '台词', 'VO', '故事总结'];
@@ -1352,7 +1386,7 @@ function renderStructuredTable(rows) {
     const allCells = [
       `<td style="font-family:'Space Mono',monospace;font-size:10px">${escapeHtml(r.performId)}</td>`,
       `<td>${typeBadge(r.type)}</td>`,
-      `<td title="${escapeHtml(r.description)}">${escapeHtml(r.shortDesc || r.description)}</td>`,
+      `<td title="${escapeHtml(r.description)}">${escapeHtml(sceneDescOf(r))}</td>`,
       `<td style="text-align:center">${r.lineCount}</td>`,
       `<td style="text-align:center;color:var(--accent)">${r.voCount}</td>`,
       `<td>${summaryCell}</td>`,
@@ -1387,6 +1421,12 @@ function renderStructuredTable(rows) {
 document.getElementById('exportCsv').addEventListener('click', () => exportStructured('csv'));
 document.getElementById('exportTsv').addEventListener('click', () => exportStructured('tsv'));
 
+/* Scene description as shown/exported: the generated (translated in EN mode)
+   short description, falling back to the raw script description. */
+function sceneDescOf(r) {
+  return r.shortDesc || r.description;
+}
+
 /* "第2幕 · 决裂" / "Act 2 · The Break" for a scene, '' if no roadmap */
 function actLabelOf(performId) {
   const act = structuredActs.find(a => a.pids.includes(performId));
@@ -1402,7 +1442,7 @@ function exportStructured(fmt) {
   const csvEsc  = (v) => fmt === 'csv' ? `"${String(v).replace(/"/g, '""')}"` : String(v);
   const rows    = [headers.map(csvEsc).join(sep)];
   structuredRows.forEach(r => {
-    rows.push([r.performId, actLabelOf(r.performId), r.type, r.description, r.lineCount, r.voCount, r.storySummary || ''].map(csvEsc).join(sep));
+    rows.push([r.performId, actLabelOf(r.performId), r.type, sceneDescOf(r), r.lineCount, r.voCount, r.storySummary || ''].map(csvEsc).join(sep));
   });
   const BOM  = '﻿';
   const blob = new Blob([BOM + rows.join('\n')], { type: 'text/plain;charset=utf-8' });

@@ -496,8 +496,6 @@ button { cursor: pointer; font-family: 'Noto Sans SC', sans-serif; }
 }
 
 .output-review {
-  max-height: 260px;
-  overflow-y: auto;
   padding: 10px 12px;
   font-size: var(--output-font-size);
   line-height: 1.7;
@@ -525,9 +523,9 @@ button { cursor: pointer; font-family: 'Noto Sans SC', sans-serif; }
 .output-review em { color: var(--text-dim); font-style: italic; }
 
 /* ─── Table Scroll ───────────────────────────────────────────────────────── */
+/* Grows to fit the table; the panel itself scrolls. */
 .table-scroll {
-  max-height: 260px;
-  overflow: auto;
+  overflow-x: auto;
 }
 
 .data-table {

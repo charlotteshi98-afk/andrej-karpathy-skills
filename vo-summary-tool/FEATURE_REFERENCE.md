@@ -196,8 +196,17 @@ Scenes are grouped into batches of ~8 000 characters and each batch is sent in O
 
 A 中文/English toggle next to Generate Table selects the output language for both the short descriptions (pass 1) and story summaries (pass 2). In English mode the reference glossary (if loaded) is injected into both prompts. Scenes with zero VO lines are prefixed `【无配音场景】` (or `[No VO]` in English mode).
 
-### Story roadmap (pass 1b)
-Between the two passes, one extra call groups the scenes into 3–6 sequential acts, each with a short title and a one-sentence milestone beat (`ACT|n|title|beat|PID1,PID2,…`). The table renders each act as a highlighted band row above its scenes, so it reads top-down like a story roadmap. If this call fails, the plain table still renders. The act label (`第2幕 · 转折` / `Act 2 · …`) is also added as a `幕` column to CSV/TSV exports and the archive copy.
+### Story roadmap — separate button (pass 1b)
+Two buttons share the same pipeline via `runStructured(withRoadmap)`:
+- **Generate Table** — the plain scene table, unchanged; the acts pass never runs.
+- **Generate Roadmap** — inserts one extra call between passes 1 and 2 that groups scenes into 3–6 sequential acts, each with a short title and a one-sentence milestone beat (`ACT|n|title|beat|PID1,PID2,…`). Each act renders as a highlighted band row above its scenes, reading top-down like a roadmap. Scenes the model leaves out of every act still render after the bands. If the acts call fails, the plain table renders instead.
+
+The act label (`第2幕 · 转折` / `Act 2 · …`) is added as a `幕` column to CSV/TSV exports and the archive copy (empty for plain-table runs).
+
+### Scene description translation
+`sceneDescOf(row)` is the single source for the displayed and exported 场景描述: the generated short description (translated in English mode), falling back to the raw script text. Exports previously wrote the raw Chinese `description` regardless of language — they now use this helper too, and the raw text remains the cell tooltip.
+
+Scenes that pass 1 skips would fall back to raw Chinese, so missing PIDs are retried in chunks of 40 for up to two extra rounds before the fallback applies. Both prompts also require one line per scene and forbid passing Chinese through in English mode.
 
 ### Copy for Tracker
 A **Copy for Tracker** export button copies a two-column TSV (`PerformID`, `剧情备注` / `Story context`) where each row is `act label | scene summary`, keyed by PerformID — paste it into the recording tracker as a story-context column so directors can follow the roadmap next to each line during sessions.
@@ -304,6 +313,9 @@ Removes `##`/`###` heading markers, `**bold**`, `*italic*` asterisks. Converts `
 
 ### Pause / Resume
 Comprehensive Analysis, Structured table, and Consistency Check show a **Pause** button next to their progress note while running. Pausing takes effect between API calls: the current call finishes, then the loop waits until Resume is clicked. (The plain Summary is a single call, so it has no pause.)
+
+### Output boxes fit their content
+Result areas size to their data rather than scrolling internally: the three output textareas (`.output-text`) are grown by `autoResize`, re-fitted by `autoResizeAllOutputs()` on window resize and font-size change; `.output-review` and the structured `.table-scroll` no longer cap their height (the table still scrolls horizontally). Script input boxes keep their fixed height, and the archive preview stays capped so the entry list remains navigable.
 
 ### `autoResize(textarea)`
 Sets `height: auto` then `height = scrollHeight` inside a `requestAnimationFrame` so the measurement happens after the layout paint.
