@@ -1073,11 +1073,14 @@ async function callClaude(systemPrompt, userPrompt) {
     throw new Error(`API error ${res.status}${detail ? `: ${detail}` : ''}. Fix: try again; if it persists, check your key and endpoint settings.`);
   }
 
-  const text = data.content?.[0]?.text;
-  if (typeof text !== 'string') {
-    throw new Error(`Unexpected response from the ${where}. Fix: confirm the endpoint speaks the Anthropic Messages API and that the Model name is one it serves.`);
-  }
-  return text;
+  // Anthropic shape: content[0].text
+  if (typeof data.content?.[0]?.text === 'string') return data.content[0].text;
+  // Some gateways answer an Anthropic-format request with an OpenAI-format
+  // body (choices[0].message.content) — read that instead of failing.
+  if (typeof data.choices?.[0]?.message?.content === 'string') return data.choices[0].message.content;
+
+  const snippet = (res.text || '').replace(/\s+/g, ' ').trim().slice(0, 300);
+  throw new Error(`Unexpected response from the ${where}. It answered but not in a recognized format. Fix: send this to your IT team so they can check the endpoint — raw response: ${snippet || '(empty)'}`);
 }
 
 /* Strip markdown decoration (asterisks, pound headers) the model may emit */

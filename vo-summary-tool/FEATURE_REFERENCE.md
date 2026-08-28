@@ -354,3 +354,5 @@ All three default to the public API, so existing setups are unaffected.
 **Model errors are not auth errors.** A 400/403/404 whose body mentions a model (e.g. `no permission to access model: …`) reports the model as the problem and points at Find models, rather than blaming the key — the key and URL are already proven correct at that point.
 
 **Save & Test** persists the settings then issues a one-token request, reporting either a connection confirmation or the specific failure (404 → wrong Base URL, 401/403 → key or auth-header mismatch, non-Anthropic body → endpoint is not Messages-API compatible).
+
+**Response shape.** A 200 response is read as Anthropic shape (`content[0].text`) first, falling back to OpenAI shape (`choices[0].message.content`) — some gateways (LiteLLM proxies especially) accept an Anthropic-formatted request but reply in OpenAI's chat-completions shape. If neither shape matches, the error includes a truncated raw snippet of the actual response so the failure can be diagnosed without needing a browser dev console.
