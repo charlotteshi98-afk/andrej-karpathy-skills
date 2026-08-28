@@ -31,6 +31,12 @@
  * ------------
  *   normalizeHeader()      — ReferenceMaterialsTracker.gs
  *   columnLetterToIndex()  — LinkReferenceFiles.gs
+ *
+ * REQUIRED SERVICE
+ * ----------------
+ * Google Sheets API must be enabled as an Advanced Service so the script
+ * can read Drive-file hyperlinks (Insert → Link) from the guide.
+ * Enable it: Apps Script editor → Services (+) → Google Sheets API → Add.
  */
 
 var PRONUNCIATION_CONFIG = {
@@ -192,6 +198,26 @@ function loadPronunciationGuide() {
   var richValues = range.getRichTextValues();
   var formulas   = range.getFormulas(); // fallback for =HYPERLINK() cells
 
+  // Drive-file hyperlinks inserted via Insert → Link are stored in a separate
+  // `hyperlink` field that getRichTextValues() does NOT expose. The Sheets API
+  // is the only reliable way to read them.
+  // Requires: Google Sheets API enabled under Services (+) in the script editor.
+  var sheetsHyperlinks = null;
+  if (typeof Sheets !== 'undefined') {
+    try {
+      var resp = Sheets.Spreadsheets.get(PRONUNCIATION_CONFIG.guideSheetId, {
+        ranges: [PRONUNCIATION_CONFIG.guideTabName],
+        fields: 'sheets/data/rowData/values/hyperlink'
+      });
+      var rowData = (resp.sheets[0].data[0].rowData || []);
+      sheetsHyperlinks = rowData.map(function(row) {
+        return (row.values || []).map(function(cell) { return cell.hyperlink || ''; });
+      });
+    } catch (e) {
+      Logger.log('Sheets API error, falling back to rich-text links: ' + e.message);
+    }
+  }
+
   var headerRowIdx = -1, nameCol = -1, pronCol = -1, notesCol = -1, audioCol = -1;
   for (var r = 0; r < values.length; r++) {
     for (var c = 0; c < values[r].length; c++) {
@@ -217,7 +243,13 @@ function loadPronunciationGuide() {
 
     var audioUrl = '';
     if (audioCol > -1) {
-      audioUrl = extractCellUrl(richValues[i][audioCol], formulas[i][audioCol]);
+      // Sheets API hyperlink field is the most reliable source; fall back to
+      // rich-text runs and formula parsing if the API isn't enabled.
+      if (sheetsHyperlinks && sheetsHyperlinks[i] && sheetsHyperlinks[i][audioCol]) {
+        audioUrl = sheetsHyperlinks[i][audioCol];
+      } else {
+        audioUrl = extractCellUrl(richValues[i][audioCol], formulas[i][audioCol]);
+      }
     }
 
     entries.push({
