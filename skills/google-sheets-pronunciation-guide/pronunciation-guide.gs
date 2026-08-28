@@ -198,47 +198,54 @@ function loadPronunciationGuide() {
   var richValues = range.getRichTextValues();
   var formulas   = range.getFormulas(); // fallback for =HYPERLINK() cells
 
-  // Drive-file hyperlinks inserted via Insert → Link are stored in a separate
-  // `hyperlink` field that getRichTextValues() does NOT expose. The Sheets API
-  // is the only reliable way to read them. Checks both the cell-level `hyperlink`
-  // field and run-level `textFormatRuns[].format.link.uri` (different link types
-  // use different storage).
-  // Requires: Google Sheets API enabled under Services (+) in the script editor.
+  // Drive file smart chips store their URL in fields that getRichTextValues()
+  // does not expose. We call the Sheets REST API directly with the script's
+  // own OAuth token (no separate Advanced Service needed) to read all three
+  // locations where Sheets can store a link URL.
   var sheetsHyperlinks = null;
   var sheetsApiError = '';
   try {
-    var resp = Sheets.Spreadsheets.get(PRONUNCIATION_CONFIG.guideSheetId, {
-      ranges: [PRONUNCIATION_CONFIG.guideTabName],
-      // Fetch all three locations where Sheets can store a link:
-      // hyperlink = plain cell-level link
-      // textFormatRuns = run-level link (older format)
-      // richTextValue  = run-level link (newer format, used by Drive smart chips)
-      fields: 'sheets/data/rowData/values/hyperlink,' +
-              'sheets/data/rowData/values/textFormatRuns/format/link,' +
-              'sheets/data/rowData/values/richTextValue/textRuns/textFormat/link'
+    var apiUrl = 'https://sheets.googleapis.com/v4/spreadsheets/' +
+      encodeURIComponent(PRONUNCIATION_CONFIG.guideSheetId) +
+      '?ranges=' + encodeURIComponent(PRONUNCIATION_CONFIG.guideTabName) +
+      '&fields=' + encodeURIComponent(
+        'sheets/data/rowData/values/hyperlink,' +
+        'sheets/data/rowData/values/textFormatRuns/format/link,' +
+        'sheets/data/rowData/values/richTextValue/textRuns/textFormat/link'
+      ) +
+      '&includeGridData=true';
+    var apiResp = UrlFetchApp.fetch(apiUrl, {
+      headers: { 'Authorization': 'Bearer ' + ScriptApp.getOAuthToken() },
+      muteHttpExceptions: true
     });
-    var rowData = (resp.sheets[0].data[0].rowData || []);
-    sheetsHyperlinks = rowData.map(function(row) {
-      return (row.values || []).map(function(cell) {
-        // 1. Plain cell-level hyperlink
-        if (cell.hyperlink) return cell.hyperlink;
-        // 2. textFormatRuns (older run-level links)
-        var runs = cell.textFormatRuns || [];
-        for (var r = 0; r < runs.length; r++) {
-          var link = runs[r].format && runs[r].format.link;
-          if (link && link.uri) return link.uri;
-        }
-        // 3. richTextValue.textRuns (Drive file smart chips)
-        var rtv = cell.richTextValue;
-        if (rtv && rtv.textRuns) {
-          for (var r = 0; r < rtv.textRuns.length; r++) {
-            var tf = rtv.textRuns[r].textFormat;
-            if (tf && tf.link && tf.link.uri) return tf.link.uri;
+    if (apiResp.getResponseCode() !== 200) {
+      throw new Error('Sheets API returned HTTP ' + apiResp.getResponseCode() + ': ' +
+                      apiResp.getContentText().slice(0, 300));
+    } else {
+      var resp = JSON.parse(apiResp.getContentText());
+      var rowData = (resp.sheets[0].data[0].rowData || []);
+      sheetsHyperlinks = rowData.map(function(row) {
+        return (row.values || []).map(function(cell) {
+          // 1. Plain cell-level hyperlink
+          if (cell.hyperlink) return cell.hyperlink;
+          // 2. textFormatRuns (older run-level links)
+          var runs = cell.textFormatRuns || [];
+          for (var r = 0; r < runs.length; r++) {
+            var link = runs[r].format && runs[r].format.link;
+            if (link && link.uri) return link.uri;
           }
-        }
-        return '';
+          // 3. richTextValue.textRuns (Drive file smart chips)
+          var rtv = cell.richTextValue;
+          if (rtv && rtv.textRuns) {
+            for (var r2 = 0; r2 < rtv.textRuns.length; r2++) {
+              var tf = rtv.textRuns[r2].textFormat;
+              if (tf && tf.link && tf.link.uri) return tf.link.uri;
+            }
+          }
+          return '';
+        });
       });
-    });
+    }
   } catch (e) {
     sheetsApiError = e.message;
   }
@@ -275,7 +282,6 @@ function loadPronunciationGuide() {
       } else {
         audioUrl = extractCellUrl(richValues[i][audioCol], formulas[i][audioCol]);
       }
-      // Keep the cell display text so we can do a DriveApp name-lookup below
       audioDisplayText = String(values[i][audioCol] || '').trim();
     }
 
@@ -288,49 +294,8 @@ function loadPronunciationGuide() {
     });
   }
 
-  // DriveApp fallback: for entries that still have no URL, collect the unique
-  // display texts (filenames) and search Drive only for those exact names,
-  // in batches of 30 to keep query strings short.
-  var missing = {};
-  entries.forEach(function(e) {
-    if (!e.audioUrl && e.audioDisplayText) missing[e.audioDisplayText] = true;
-  });
-  var missingNames = Object.keys(missing);
-  if (missingNames.length > 0) {
-    var driveMap = buildDriveAudioMap(missingNames);
-    entries.forEach(function(e) {
-      if (!e.audioUrl && e.audioDisplayText) {
-        e.audioUrl = driveMap[e.audioDisplayText] || '';
-      }
-    });
-  }
-
   entries.forEach(function(e) { delete e.audioDisplayText; });
   return entries;
-}
-
-// Searches Drive for files whose names match the given list, in batches of 30.
-// Returns a map of filename → web URL.
-function buildDriveAudioMap(filenames) {
-  var map = {};
-  var BATCH = 30;
-  for (var start = 0; start < filenames.length; start += BATCH) {
-    var batch = filenames.slice(start, start + BATCH);
-    var query = batch.map(function(n) {
-      return 'title = "' + n.replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"';
-    }).join(' or ');
-    query += ' and trashed = false';
-    try {
-      var files = DriveApp.searchFiles(query);
-      while (files.hasNext()) {
-        var f = files.next();
-        map[f.getName()] = f.getUrl();
-      }
-    } catch (e) {
-      Logger.log('DriveApp batch search failed: ' + e.message);
-    }
-  }
-  return map;
 }
 
 // Extracts a hyperlink URL from a cell. Checks rich-text runs first — Drive-
