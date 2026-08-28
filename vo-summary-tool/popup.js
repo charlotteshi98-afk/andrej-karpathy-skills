@@ -66,6 +66,74 @@ document.getElementById('saveApiKey').addEventListener('click', () => {
   });
 });
 
+/* ── Company API endpoint settings ──────────────────────────── */
+document.getElementById('toggleEndpoint').addEventListener('click', async () => {
+  const bar = document.getElementById('endpointBar');
+  const showing = bar.style.display === 'none';
+  bar.style.display = showing ? '' : 'none';
+  if (showing) {
+    const s = await chrome.storage.local.get(['apiEndpoint', 'apiModel', 'authStyle']);
+    document.getElementById('endpointInput').value = s.apiEndpoint || '';
+    document.getElementById('modelInput').value    = s.apiModel || '';
+    document.getElementById('authStyleSelect').value = s.authStyle || 'auto';
+  }
+});
+
+function setEndpointStatus(msg, kind) {
+  const el = document.getElementById('endpointStatus');
+  el.textContent = msg;
+  el.style.display = msg ? 'block' : 'none';
+  el.style.color = kind === 'err' ? 'var(--accent3)'
+                 : kind === 'ok'  ? 'var(--accent2)' : 'var(--text-dimmer)';
+}
+
+document.getElementById('resetEndpoint').addEventListener('click', () => {
+  chrome.storage.local.set({ apiEndpoint: '', apiModel: '', authStyle: 'auto' }, () => {
+    document.getElementById('endpointInput').value = '';
+    document.getElementById('modelInput').value = '';
+    document.getElementById('authStyleSelect').value = 'auto';
+    setEndpointStatus('Reset — using the public Anthropic API.', 'ok');
+  });
+});
+
+document.getElementById('saveEndpoint').addEventListener('click', async () => {
+  const raw   = document.getElementById('endpointInput').value.trim();
+  const model = document.getElementById('modelInput').value.trim();
+  const style = document.getElementById('authStyleSelect').value;
+
+  if (raw) {
+    let parsed;
+    try { parsed = new URL(raw); } catch (e) {
+      setEndpointStatus('That is not a valid URL. Example: https://llm.mycompany.com', 'err');
+      return;
+    }
+    if (parsed.protocol !== 'https:') {
+      setEndpointStatus('The Base URL must start with https:// — Chrome blocks plain http from extensions.', 'err');
+      return;
+    }
+    // Reaching a new host needs its permission granted at runtime.
+    const origin = `${parsed.origin}/*`;
+    const has = await chrome.permissions.contains({ origins: [origin] });
+    if (!has) {
+      setEndpointStatus('Waiting for permission to contact that host…');
+      const granted = await chrome.permissions.request({ origins: [origin] });
+      if (!granted) {
+        setEndpointStatus(`Permission denied for ${parsed.origin}. The tool cannot call it without that.`, 'err');
+        return;
+      }
+    }
+  }
+
+  await chrome.storage.local.set({ apiEndpoint: raw, apiModel: model, authStyle: style });
+  setEndpointStatus('Saved — testing…');
+  try {
+    await callClaude('Reply with the single word: ok', 'ping');
+    setEndpointStatus('✓ Connected. The endpoint answered correctly.', 'ok');
+  } catch (err) {
+    setEndpointStatus('✗ ' + err.message, 'err');
+  }
+});
+
 /* Collapse the key input once saved; "Key" button re-expands it */
 function setApiBarCollapsed(collapsed) {
   document.getElementById('apiKeyInput').style.display = collapsed ? 'none' : '';
@@ -845,43 +913,91 @@ function setBusy(btn, busy, originalHTML) {
 }
 
 /* ── Claude API ─────────────────────────────────────────────── */
-async function callClaude(systemPrompt, userPrompt) {
-  const { apiKey } = await chrome.storage.local.get(['apiKey']);
-  if (!apiKey) throw new Error('No API key saved. Please enter your key above.');
+const DEFAULT_ENDPOINT = 'https://api.anthropic.com';
+const DEFAULT_MODEL    = 'claude-sonnet-4-5';
 
-  const response = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-api-key': apiKey,
-      'anthropic-version': '2023-06-01',
-      'anthropic-dangerous-direct-browser-access': 'true',
-    },
-    body: JSON.stringify({
-      model:      'claude-sonnet-4-5',
+/* Endpoint config: blank/absent settings mean the public Anthropic API, so
+   existing users are unaffected. A company gateway supplies its own base URL,
+   model name and auth header style. */
+async function getApiConfig() {
+  const s = await chrome.storage.local.get(['apiKey', 'apiEndpoint', 'apiModel', 'authStyle']);
+  const base = (s.apiEndpoint || DEFAULT_ENDPOINT).trim().replace(/\/+$/, '');
+  return {
+    apiKey:    s.apiKey,
+    // Gateways are usually mounted at a prefix; only append the path if the
+    // saved URL does not already end in one.
+    url:       /\/v\d+\/messages$/.test(base) ? base : `${base}/v1/messages`,
+    model:     (s.apiModel || DEFAULT_MODEL).trim(),
+    authStyle: s.authStyle || 'auto',
+    isDefault: base === DEFAULT_ENDPOINT,
+  };
+}
+
+function buildAuthHeaders(cfg) {
+  const h = {
+    'Content-Type': 'application/json',
+    'anthropic-version': '2023-06-01',
+    'anthropic-dangerous-direct-browser-access': 'true',
+  };
+  if (cfg.authStyle === 'bearer') {
+    h['Authorization'] = `Bearer ${cfg.apiKey}`;
+  } else if (cfg.authStyle === 'x-api-key') {
+    h['x-api-key'] = cfg.apiKey;
+  } else {
+    // auto: gateways differ in which header they read; send both.
+    h['x-api-key'] = cfg.apiKey;
+    if (!cfg.isDefault) h['Authorization'] = `Bearer ${cfg.apiKey}`;
+  }
+  return h;
+}
+
+async function callClaude(systemPrompt, userPrompt) {
+  const cfg = await getApiConfig();
+  if (!cfg.apiKey) throw new Error('No API key saved. Please enter your key above.');
+
+  const res = await chrome.runtime.sendMessage({
+    type: 'callClaude',
+    url: cfg.url,
+    headers: buildAuthHeaders(cfg),
+    body: {
+      model:      cfg.model,
       max_tokens: 4096,
       system:     systemPrompt,
       messages:   [{ role: 'user', content: userPrompt }],
-    }),
+    },
   });
 
-  if (!response.ok) {
-    const err = await response.json().catch(() => ({}));
-    const detail = err.error?.message || '';
-    if (response.status === 401) {
-      throw new Error('API key rejected (401). Fix: re-enter a valid Anthropic API key in the bar above and click Save.');
-    }
-    if (response.status === 429) {
-      throw new Error('Rate limit reached (429). Fix: wait about a minute, then try again. For large scripts, generate one feature at a time.');
-    }
-    if (response.status === 529 || response.status === 503) {
-      throw new Error('Claude API is overloaded right now. Fix: wait a moment and try again.');
-    }
-    throw new Error(`Claude API error ${response.status}${detail ? `: ${detail}` : ''}. Fix: try again; if it persists, check your API key and network.`);
+  const where = cfg.isDefault ? 'Anthropic API' : `company endpoint (${cfg.url})`;
+  if (!res) throw new Error('The extension background did not respond. Fix: reload the extension at chrome://extensions.');
+  if (res.error) {
+    throw new Error(`Could not reach the ${where}: ${res.error}. Fix: check the Base URL under "Endpoint", your network/VPN, and that the host permission was granted.`);
   }
 
-  const data = await response.json();
-  return data.content[0].text;
+  let data = {};
+  try { data = JSON.parse(res.text); } catch (e) { /* non-JSON error body handled below */ }
+
+  if (!res.ok) {
+    const detail = data.error?.message || (res.text || '').slice(0, 200);
+    if (res.status === 401 || res.status === 403) {
+      throw new Error(`API key rejected (${res.status}) by the ${where}${detail ? `: ${detail}` : ''}. Fix: check the key is valid for this endpoint, and that the auth header style under "Endpoint" matches what your gateway expects.`);
+    }
+    if (res.status === 404) {
+      throw new Error(`Endpoint not found (404): ${cfg.url}. Fix: check the Base URL under "Endpoint" — most gateways want the root URL, not the /v1/messages path.`);
+    }
+    if (res.status === 429) {
+      throw new Error('Rate limit reached (429). Fix: wait about a minute, then try again. For large scripts, generate one feature at a time.');
+    }
+    if (res.status === 529 || res.status === 503) {
+      throw new Error('The API is overloaded right now. Fix: wait a moment and try again.');
+    }
+    throw new Error(`API error ${res.status}${detail ? `: ${detail}` : ''}. Fix: try again; if it persists, check your key and endpoint settings.`);
+  }
+
+  const text = data.content?.[0]?.text;
+  if (typeof text !== 'string') {
+    throw new Error(`Unexpected response from the ${where}. Fix: confirm the endpoint speaks the Anthropic Messages API and that the Model name is one it serves.`);
+  }
+  return text;
 }
 
 /* Strip markdown decoration (asterisks, pound headers) the model may emit */

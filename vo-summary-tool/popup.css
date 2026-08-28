@@ -86,6 +86,52 @@ html, body {
 .api-bar input:focus { border-color: var(--accent2); }
 .api-bar input::placeholder { color: var(--text-dimmer); }
 
+/* ─── Company endpoint settings ──────────────────────────────── */
+.endpoint-bar {
+  padding: 8px 12px;
+  background: var(--surface2);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.endpoint-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.endpoint-row label {
+  width: 76px;
+  flex-shrink: 0;
+  font-size: 10px;
+  font-family: 'Space Mono', monospace;
+  color: var(--text-dimmer);
+}
+.endpoint-row input,
+.endpoint-row select {
+  flex: 1;
+  min-width: 0;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text);
+  font-family: 'Space Mono', monospace;
+  font-size: 11px;
+  padding: 5px 9px;
+  outline: none;
+}
+.endpoint-row input:focus,
+.endpoint-row select:focus { border-color: var(--accent2); }
+.endpoint-actions { display: flex; gap: 6px; margin-bottom: 6px; }
+.endpoint-hint {
+  font-size: 10px;
+  line-height: 1.5;
+  color: var(--text-dimmer);
+}
+.endpoint-hint code {
+  font-family: 'Space Mono', monospace;
+  color: var(--accent2);
+}
+
 .key-status {
   font-family: 'Space Mono', monospace;
   font-size: 10px;

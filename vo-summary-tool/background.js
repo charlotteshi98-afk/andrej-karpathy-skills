@@ -6,6 +6,27 @@ chrome.sidePanel
 /* Fetch Google Sheet CSV on behalf of the side panel.
    The panel page is blocked by CORS when fetching docs.google.com directly;
    the service worker can use host_permissions without CORS. */
+/* Call the Claude-compatible endpoint from the service worker.
+   Company gateways rarely send CORS headers for extension origins, and the
+   worker's host_permissions bypass CORS entirely. */
+chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+  if (msg.type !== 'callClaude') return;
+  (async () => {
+    try {
+      const resp = await fetch(msg.url, {
+        method: 'POST',
+        headers: msg.headers,
+        body: JSON.stringify(msg.body),
+      });
+      const text = await resp.text();
+      sendResponse({ ok: resp.ok, status: resp.status, text });
+    } catch (err) {
+      sendResponse({ ok: false, error: err.message });
+    }
+  })();
+  return true;
+});
+
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (msg.type !== 'fetchSheetCsv') return;
   (async () => {

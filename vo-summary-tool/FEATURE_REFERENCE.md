@@ -322,3 +322,29 @@ Sets `height: auto` then `height = scrollHeight` inside a `requestAnimationFrame
 
 ### Archive
 All generated outputs have a **Save** button (visible after generation). Each saved entry stores: timestamp, source tag (CN / EN / Glossary / Structured / Consistency), label, full content. Entries persist in `chrome.storage.local`. Viewable/deletable in the Archive tab.
+
+---
+
+## Using a company API endpoint
+
+The tool calls the Anthropic Messages API by default. An **Endpoint** button in the top bar opens settings for routing through a company gateway instead (LiteLLM, Portkey, or any Anthropic-Messages-compatible proxy).
+
+| Setting | Stored as | Blank means |
+|---|---|---|
+| Base URL | `apiEndpoint` | `https://api.anthropic.com` |
+| Model | `apiModel` | `claude-sonnet-4-5` |
+| Auth header | `authStyle` | `auto` |
+
+All three default to the public API, so existing setups are unaffected.
+
+**Which key you have.** A key starting with `sk-ant-` is a direct Anthropic key and needs no Base URL. A key starting with `sk-` *without* `ant-` is a gateway virtual key and only works against that gateway's URL.
+
+**URL handling.** `/v1/messages` is appended unless the saved URL already ends in a `/vN/messages` path, so both the root URL and a full endpoint path work. Trailing slashes are stripped. Only `https://` is accepted — Chrome blocks plaintext HTTP from extensions.
+
+**Auth styles.** `auto` sends `x-api-key` and, for non-default endpoints, also `Authorization: Bearer` — gateways differ in which they read. The explicit `x-api-key` and `bearer` options send only that one, for gateways that reject the other.
+
+**Host permissions.** The manifest declares `optional_host_permissions: ["https://*/*"]`; saving a custom Base URL calls `chrome.permissions.request()` for that origin, so Chrome prompts once per host rather than the extension asking for blanket access up front.
+
+**CORS.** Claude calls now go through the background service worker (`type: 'callClaude'`), whose `host_permissions` bypass CORS — company gateways rarely send CORS headers for extension origins, which would otherwise fail with "Failed to fetch".
+
+**Save & Test** persists the settings then issues a one-token request, reporting either a connection confirmation or the specific failure (404 → wrong Base URL, 401/403 → key or auth-header mismatch, non-Anthropic body → endpoint is not Messages-API compatible).
