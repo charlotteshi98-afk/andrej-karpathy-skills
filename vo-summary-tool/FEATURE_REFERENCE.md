@@ -343,7 +343,7 @@ All three default to the public API, so existing setups are unaffected.
 
 **Auth styles.** `auto` sends `x-api-key` and, for non-default endpoints, also `Authorization: Bearer` — gateways differ in which they read. The explicit `x-api-key` and `bearer` options send only that one, for gateways that reject the other.
 
-**Host permissions.** The manifest declares `optional_host_permissions: ["https://*/*"]`; saving a custom Base URL calls `chrome.permissions.request()` for that origin, so Chrome prompts once per host rather than the extension asking for blanket access up front.
+**Host permissions.** The manifest declares `optional_host_permissions: ["https://*/*"]`. `ensureHostPermission(raw)` calls `chrome.permissions.request()` for the URL's origin and is shared by both Save & Test and Find models — Find models originally skipped this check, so calling it before ever running Save & Test failed both model-list endpoints with an unexplained "Failed to fetch" (the background worker had no permission to reach the host yet).
 
 **CORS.** Claude calls now go through the background service worker (`type: 'callClaude'`), whose `host_permissions` bypass CORS — company gateways rarely send CORS headers for extension origins, which would otherwise fail with "Failed to fetch".
 

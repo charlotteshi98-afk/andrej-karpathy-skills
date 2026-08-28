@@ -140,6 +140,7 @@ document.getElementById('modelList').addEventListener('click', async (e) => {
 
 document.getElementById('findModels').addEventListener('click', async () => {
   const raw = document.getElementById('endpointInput').value.trim();
+  if (!(await ensureHostPermission(raw))) return;
   await chrome.storage.local.set({
     apiEndpoint: raw,
     authStyle: document.getElementById('authStyleSelect').value,
@@ -175,33 +176,39 @@ document.getElementById('resetEndpoint').addEventListener('click', () => {
   });
 });
 
+/* Reaching a new host needs its permission granted at runtime (the background
+   worker's static host_permissions only cover api.anthropic.com). Returns
+   true if the host is reachable, false (with a status message) otherwise —
+   shared by Save & Test and Find models so neither can skip the prompt. */
+async function ensureHostPermission(raw) {
+  if (!raw) return true;
+  let parsed;
+  try { parsed = new URL(raw); } catch (e) {
+    setEndpointStatus('That is not a valid URL. Example: https://llm.mycompany.com', 'err');
+    return false;
+  }
+  if (parsed.protocol !== 'https:') {
+    setEndpointStatus('The Base URL must start with https:// — Chrome blocks plain http from extensions.', 'err');
+    return false;
+  }
+  const origin = `${parsed.origin}/*`;
+  const has = await chrome.permissions.contains({ origins: [origin] });
+  if (has) return true;
+  setEndpointStatus('Waiting for permission to contact that host…');
+  const granted = await chrome.permissions.request({ origins: [origin] });
+  if (!granted) {
+    setEndpointStatus(`Permission denied for ${parsed.origin}. The tool cannot call it without that.`, 'err');
+    return false;
+  }
+  return true;
+}
+
 document.getElementById('saveEndpoint').addEventListener('click', async () => {
   const raw   = document.getElementById('endpointInput').value.trim();
   const model = document.getElementById('modelInput').value.trim();
   const style = document.getElementById('authStyleSelect').value;
 
-  if (raw) {
-    let parsed;
-    try { parsed = new URL(raw); } catch (e) {
-      setEndpointStatus('That is not a valid URL. Example: https://llm.mycompany.com', 'err');
-      return;
-    }
-    if (parsed.protocol !== 'https:') {
-      setEndpointStatus('The Base URL must start with https:// — Chrome blocks plain http from extensions.', 'err');
-      return;
-    }
-    // Reaching a new host needs its permission granted at runtime.
-    const origin = `${parsed.origin}/*`;
-    const has = await chrome.permissions.contains({ origins: [origin] });
-    if (!has) {
-      setEndpointStatus('Waiting for permission to contact that host…');
-      const granted = await chrome.permissions.request({ origins: [origin] });
-      if (!granted) {
-        setEndpointStatus(`Permission denied for ${parsed.origin}. The tool cannot call it without that.`, 'err');
-        return;
-      }
-    }
-  }
+  if (!(await ensureHostPermission(raw))) return;
 
   await chrome.storage.local.set({ apiEndpoint: raw, apiModel: model, authStyle: style });
   setEndpointStatus('Saved — testing…');
