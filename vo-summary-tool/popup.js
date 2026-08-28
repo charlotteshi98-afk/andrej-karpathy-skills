@@ -1073,8 +1073,13 @@ async function callClaude(systemPrompt, userPrompt) {
     throw new Error(`API error ${res.status}${detail ? `: ${detail}` : ''}. Fix: try again; if it persists, check your key and endpoint settings.`);
   }
 
-  // Anthropic shape: content[0].text
-  if (typeof data.content?.[0]?.text === 'string') return data.content[0].text;
+  // Anthropic shape: content is a list of blocks (text / thinking / …).
+  // With extended thinking on, the first block is "thinking", not the
+  // answer — find the actual text block instead of assuming index 0.
+  if (Array.isArray(data.content)) {
+    const textBlock = data.content.find(b => b && b.type === 'text' && typeof b.text === 'string');
+    if (textBlock) return textBlock.text;
+  }
   // Some gateways answer an Anthropic-format request with an OpenAI-format
   // body (choices[0].message.content) — read that instead of failing.
   if (typeof data.choices?.[0]?.message?.content === 'string') return data.choices[0].message.content;
