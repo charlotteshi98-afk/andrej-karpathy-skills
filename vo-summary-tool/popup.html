@@ -35,7 +35,9 @@
     </div>
     <div class="endpoint-row">
       <label for="modelInput">Model</label>
-      <input type="text" id="modelInput" placeholder="claude-sonnet-4-5" autocomplete="off" />
+      <input type="text" id="modelInput" list="modelOptions" placeholder="claude-sonnet-4-5" autocomplete="off" />
+      <datalist id="modelOptions"></datalist>
+      <button id="findModels" class="btn-copy">Find models</button>
     </div>
     <div class="endpoint-row">
       <label for="authStyleSelect">Auth header</label>

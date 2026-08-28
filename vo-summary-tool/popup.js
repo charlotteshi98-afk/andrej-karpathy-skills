@@ -87,6 +87,58 @@ function setEndpointStatus(msg, kind) {
                  : kind === 'ok'  ? 'var(--accent2)' : 'var(--text-dimmer)';
 }
 
+/* Ask the endpoint which models this key may use. Anthropic and
+   OpenAI-style gateways both answer {data: [{id}, …]}. */
+async function fetchModelList(cfg) {
+  const base = cfg.url.replace(/\/v\d+\/messages$/, '');
+  const errs = [];
+  for (const path of ['/v1/models', '/models']) {
+    const res = await chrome.runtime.sendMessage({
+      type: 'callClaude', method: 'GET', url: base + path, headers: buildAuthHeaders(cfg),
+    });
+    if (!res || res.error) { errs.push(res?.error || 'no response'); continue; }
+    if (!res.ok) { errs.push(`HTTP ${res.status}`); continue; }
+    try {
+      const list = JSON.parse(res.text);
+      const ids = (list.data || list.models || [])
+        .map(m => (typeof m === 'string' ? m : m.id || m.name))
+        .filter(Boolean);
+      if (ids.length) return ids;
+      errs.push('empty list');
+    } catch (e) { errs.push('unreadable response'); }
+  }
+  throw new Error(`Could not list models (${errs.join('; ')}).`);
+}
+
+document.getElementById('findModels').addEventListener('click', async () => {
+  const raw = document.getElementById('endpointInput').value.trim();
+  await chrome.storage.local.set({
+    apiEndpoint: raw,
+    authStyle: document.getElementById('authStyleSelect').value,
+  });
+  setEndpointStatus('Asking the endpoint which models you can use…');
+  try {
+    const cfg = await getApiConfig();
+    if (!cfg.apiKey) { setEndpointStatus('Save your API key first (the box at the top).', 'err'); return; }
+    const ids = await fetchModelList(cfg);
+
+    document.getElementById('modelOptions').innerHTML =
+      ids.map(id => `<option value="${escapeHtml(id)}"></option>`).join('');
+
+    // Prefer a Claude model, newest-looking first, so the box is usable as-is.
+    const claude = ids.filter(id => /claude/i.test(id)).sort().reverse();
+    const pick = claude[0] || ids[0];
+    document.getElementById('modelInput').value = pick;
+    await chrome.storage.local.set({ apiModel: pick });
+    setEndpointStatus(
+      `✓ ${ids.length} model${ids.length > 1 ? 's' : ''} available. Filled in "${pick}"` +
+      (claude.length > 1 ? ` — click the Model box to see the other ${claude.length - 1} Claude option${claude.length > 2 ? 's' : ''}.` : '.') +
+      ' Now click Save & Test.', 'ok');
+  } catch (err) {
+    setEndpointStatus('✗ ' + err.message + ' Ask your IT team which model name to use, and type it into the Model box.', 'err');
+  }
+});
+
 document.getElementById('resetEndpoint').addEventListener('click', () => {
   chrome.storage.local.set({ apiEndpoint: '', apiModel: '', authStyle: 'auto' }, () => {
     document.getElementById('endpointInput').value = '';
@@ -1001,6 +1053,11 @@ async function callClaude(systemPrompt, userPrompt) {
 
   if (!res.ok) {
     const detail = data.error?.message || (res.text || '').slice(0, 200);
+    // A model-permission 403 means the key and URL are fine — only the model
+    // name is wrong. Saying "key rejected" here sends people down a dead end.
+    if (/model/i.test(detail) && (res.status === 403 || res.status === 404 || res.status === 400)) {
+      throw new Error(`The endpoint rejected the model "${cfg.model}": ${detail}. Fix: click "Find models" under "Endpoint" to see which models your key can use, then pick one.`);
+    }
     if (res.status === 401 || res.status === 403) {
       throw new Error(`API key rejected (${res.status}) by the ${where}${detail ? `: ${detail}` : ''}. Fix: check the key is valid for this endpoint, and that the auth header style under "Endpoint" matches what your gateway expects.`);
     }

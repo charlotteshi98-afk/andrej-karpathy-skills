@@ -13,10 +13,11 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (msg.type !== 'callClaude') return;
   (async () => {
     try {
+      const method = msg.method || 'POST';
       const resp = await fetch(msg.url, {
-        method: 'POST',
+        method,
         headers: msg.headers,
-        body: JSON.stringify(msg.body),
+        ...(method === 'GET' ? {} : { body: JSON.stringify(msg.body) }),
       });
       const text = await resp.text();
       sendResponse({ ok: resp.ok, status: resp.status, text });

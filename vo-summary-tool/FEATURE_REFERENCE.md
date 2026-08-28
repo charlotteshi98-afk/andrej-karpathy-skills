@@ -349,4 +349,8 @@ All three default to the public API, so existing setups are unaffected.
 
 **Path auto-discovery.** If the test returns 404 — host reachable, API mounted elsewhere — Save & Test retries a bounded list of common gateway prefixes (`/anthropic`, `/api/anthropic`, `/api`, `/claude`, `/anthropic/v1`) and saves whichever answers, updating the input box. Non-404 failures (401/403, network) do not trigger probing, since the path is not the problem. If every candidate fails, the URL the user typed is restored and the message directs them to ask their IT team.
 
+**Find models.** Queries `{base}/v1/models`, falling back to `{base}/models`, and reads `data[].id` — the shape both Anthropic and OpenAI-style gateways return. Results populate a datalist on the Model box; a Claude model is preselected (newest-looking first) and saved, so the common case needs no typing. Gateways that expose no model listing produce a message directing the user to ask IT.
+
+**Model errors are not auth errors.** A 400/403/404 whose body mentions a model (e.g. `no permission to access model: …`) reports the model as the problem and points at Find models, rather than blaming the key — the key and URL are already proven correct at that point.
+
 **Save & Test** persists the settings then issues a one-token request, reporting either a connection confirmation or the specific failure (404 → wrong Base URL, 401/403 → key or auth-header mismatch, non-Anthropic body → endpoint is not Messages-API compatible).
