@@ -200,22 +200,31 @@ function loadPronunciationGuide() {
 
   // Drive-file hyperlinks inserted via Insert → Link are stored in a separate
   // `hyperlink` field that getRichTextValues() does NOT expose. The Sheets API
-  // is the only reliable way to read them.
+  // is the only reliable way to read them. Checks both the cell-level `hyperlink`
+  // field and run-level `textFormatRuns[].format.link.uri` (different link types
+  // use different storage).
   // Requires: Google Sheets API enabled under Services (+) in the script editor.
   var sheetsHyperlinks = null;
-  if (typeof Sheets !== 'undefined') {
-    try {
-      var resp = Sheets.Spreadsheets.get(PRONUNCIATION_CONFIG.guideSheetId, {
-        ranges: [PRONUNCIATION_CONFIG.guideTabName],
-        fields: 'sheets/data/rowData/values/hyperlink'
+  var sheetsApiError = '';
+  try {
+    var resp = Sheets.Spreadsheets.get(PRONUNCIATION_CONFIG.guideSheetId, {
+      ranges: [PRONUNCIATION_CONFIG.guideTabName],
+      fields: 'sheets/data/rowData/values/hyperlink,sheets/data/rowData/values/textFormatRuns/format/link'
+    });
+    var rowData = (resp.sheets[0].data[0].rowData || []);
+    sheetsHyperlinks = rowData.map(function(row) {
+      return (row.values || []).map(function(cell) {
+        if (cell.hyperlink) return cell.hyperlink;
+        var runs = cell.textFormatRuns || [];
+        for (var r = 0; r < runs.length; r++) {
+          var link = runs[r].format && runs[r].format.link;
+          if (link && link.uri) return link.uri;
+        }
+        return '';
       });
-      var rowData = (resp.sheets[0].data[0].rowData || []);
-      sheetsHyperlinks = rowData.map(function(row) {
-        return (row.values || []).map(function(cell) { return cell.hyperlink || ''; });
-      });
-    } catch (e) {
-      Logger.log('Sheets API error, falling back to rich-text links: ' + e.message);
-    }
+    });
+  } catch (e) {
+    sheetsApiError = e.message;
   }
 
   var headerRowIdx = -1, nameCol = -1, pronCol = -1, notesCol = -1, audioCol = -1;
@@ -298,6 +307,71 @@ function buildNameMatcher(name) {
   var escaped     = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   var isAsciiWord = /^[A-Za-z0-9'\-]+$/.test(name);
   return isAsciiWord ? new RegExp('\\b' + escaped + '\\b') : new RegExp(escaped);
+}
+
+
+// ─── Debug helper ────────────────────────────────────────────────────────────
+
+// Run this directly from the Apps Script editor (not via the menu) to diagnose
+// why audio links aren't appearing. It shows: whether the Sheets API is reachable,
+// what URL (if any) was found for each entry, and the raw cell values in column E.
+function debugPronunciationGuide() {
+  var ui = SpreadsheetApp.getUi();
+  var lines = [];
+
+  // 1. Sheets API availability
+  try {
+    var testResp = Sheets.Spreadsheets.get(PRONUNCIATION_CONFIG.guideSheetId, {
+      fields: 'spreadsheetId'
+    });
+    lines.push('Sheets API: OK (spreadsheetId=' + testResp.spreadsheetId + ')');
+  } catch (e) {
+    lines.push('Sheets API ERROR: ' + e.message);
+    lines.push('→ Enable it: Services (+) > Google Sheets API > Add');
+    ui.alert('Debug result', lines.join('\n'), ui.ButtonSet.OK);
+    return;
+  }
+
+  // 2. Load entries and show first 8 with their resolved audioUrl
+  try {
+    var entries = loadPronunciationGuide();
+    lines.push('\nEntries loaded: ' + entries.length);
+    lines.push('First 8 entries:');
+    var sample = entries.slice(0, 8);
+    sample.forEach(function(e) {
+      lines.push('  ' + e.name + ' → ' + (e.audioUrl || '(no URL found)'));
+    });
+  } catch (e) {
+    lines.push('\nloadPronunciationGuide() threw: ' + e.message);
+  }
+
+  // 3. Raw Sheets API dump for the audio column (first 8 data rows)
+  try {
+    var resp = Sheets.Spreadsheets.get(PRONUNCIATION_CONFIG.guideSheetId, {
+      ranges: [PRONUNCIATION_CONFIG.guideTabName],
+      fields: 'sheets/data/rowData/values/hyperlink,sheets/data/rowData/values/textFormatRuns/format/link,sheets/data/rowData/values/formattedValue'
+    });
+    var rowData = resp.sheets[0].data[0].rowData || [];
+    var audioColFallback = columnLetterToIndex(PRONUNCIATION_CONFIG.audioLinkColumnFallback) - 1;
+    lines.push('\nRaw Sheets API — audio column (rows 2–9):');
+    for (var i = 1; i <= Math.min(8, rowData.length - 1); i++) {
+      var row = rowData[i] || {};
+      var cell = (row.values || [])[audioColFallback] || {};
+      var url = cell.hyperlink || '';
+      if (!url) {
+        var runs = cell.textFormatRuns || [];
+        for (var r = 0; r < runs.length; r++) {
+          var l = runs[r].format && runs[r].format.link;
+          if (l && l.uri) { url = l.uri; break; }
+        }
+      }
+      lines.push('  row ' + (i + 1) + ': "' + (cell.formattedValue || '') + '" → ' + (url || '(none)'));
+    }
+  } catch (e) {
+    lines.push('\nRaw dump error: ' + e.message);
+  }
+
+  ui.alert('Pronunciation Guide Debug', lines.join('\n'), ui.ButtonSet.OK);
 }
 
 
