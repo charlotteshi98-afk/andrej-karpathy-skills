@@ -267,24 +267,63 @@ function loadPronunciationGuide() {
     if (!name) continue;
 
     var audioUrl = '';
+    var audioDisplayText = '';
     if (audioCol > -1) {
-      // Sheets API hyperlink field is the most reliable source; fall back to
-      // rich-text runs and formula parsing if the API isn't enabled.
+      // Try Sheets API first (handles plain hyperlinks and =HYPERLINK() formulas)
       if (sheetsHyperlinks && sheetsHyperlinks[i] && sheetsHyperlinks[i][audioCol]) {
         audioUrl = sheetsHyperlinks[i][audioCol];
       } else {
         audioUrl = extractCellUrl(richValues[i][audioCol], formulas[i][audioCol]);
       }
+      // Keep the cell display text so we can do a DriveApp name-lookup below
+      audioDisplayText = String(values[i][audioCol] || '').trim();
     }
 
     entries.push({
-      name:          name,
-      pronunciation: pronCol  > -1 ? String(values[i][pronCol]  || '').trim() : '',
-      notes:         notesCol > -1 ? String(values[i][notesCol] || '').trim() : '',
-      audioUrl:      audioUrl
+      name:             name,
+      pronunciation:    pronCol  > -1 ? String(values[i][pronCol]  || '').trim() : '',
+      notes:            notesCol > -1 ? String(values[i][notesCol] || '').trim() : '',
+      audioUrl:         audioUrl,
+      audioDisplayText: audioDisplayText
     });
   }
+
+  // DriveApp fallback: for any entry that still has no URL but has a display
+  // text (the filename shown in the cell), search Drive for a file with that
+  // name. One broad search covers all entries — no per-file API calls.
+  var needsDrive = entries.some(function(e) { return !e.audioUrl && e.audioDisplayText; });
+  if (needsDrive) {
+    var driveMap = buildDriveAudioMap();
+    entries.forEach(function(e) {
+      if (!e.audioUrl && e.audioDisplayText) {
+        e.audioUrl = driveMap[e.audioDisplayText] || '';
+      }
+    });
+  }
+
+  // Strip the temporary display-text field before returning
+  entries.forEach(function(e) { delete e.audioDisplayText; });
   return entries;
+}
+
+// Searches Drive for audio files and returns a map of filename → web URL.
+// Covers My Drive and Shared Drives the user has access to.
+function buildDriveAudioMap() {
+  var map = {};
+  try {
+    var files = DriveApp.searchFiles(
+      '(mimeType contains "audio/" or ' +
+      ' title contains ".wav" or title contains ".mp3" or title contains ".m4a") ' +
+      'and trashed = false'
+    );
+    while (files.hasNext()) {
+      var f = files.next();
+      map[f.getName()] = f.getUrl();
+    }
+  } catch (e) {
+    Logger.log('DriveApp audio search failed: ' + e.message);
+  }
+  return map;
 }
 
 // Extracts a hyperlink URL from a cell. Checks rich-text runs first — Drive-
@@ -342,17 +381,27 @@ function debugPronunciationGuide() {
     });
     lines.push('Sheets API: OK (spreadsheetId=' + testResp.spreadsheetId + ')');
   } catch (e) {
-    lines.push('Sheets API ERROR: ' + e.message);
-    lines.push('→ Enable it: Services (+) > Google Sheets API > Add');
-    ui.alert('Debug result', lines.join('\n'), ui.ButtonSet.OK);
-    return;
+    lines.push('Sheets API ERROR: ' + e.message + ' (DriveApp fallback will be used)');
   }
 
-  // 2. Load entries and show first 8 with their resolved audioUrl
+  // 2. DriveApp audio search
+  try {
+    var driveMap = buildDriveAudioMap();
+    var driveCount = Object.keys(driveMap).length;
+    lines.push('\nDriveApp audio files found: ' + driveCount);
+    if (driveCount > 0) {
+      var sample = Object.keys(driveMap).slice(0, 5);
+      sample.forEach(function(k) { lines.push('  ' + k + ' → ' + driveMap[k]); });
+    }
+  } catch (e) {
+    lines.push('\nDriveApp ERROR: ' + e.message);
+  }
+
+  // 3. Load entries and show first 8 with their resolved audioUrl
   try {
     var entries = loadPronunciationGuide();
     lines.push('\nEntries loaded: ' + entries.length);
-    lines.push('First 8 entries:');
+    lines.push('First 8 with audio:');
     var sample = entries.slice(0, 8);
     sample.forEach(function(e) {
       lines.push('  ' + e.name + ' → ' + (e.audioUrl || '(no URL found)'));
