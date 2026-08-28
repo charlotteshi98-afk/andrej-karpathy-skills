@@ -209,16 +209,32 @@ function loadPronunciationGuide() {
   try {
     var resp = Sheets.Spreadsheets.get(PRONUNCIATION_CONFIG.guideSheetId, {
       ranges: [PRONUNCIATION_CONFIG.guideTabName],
-      fields: 'sheets/data/rowData/values/hyperlink,sheets/data/rowData/values/textFormatRuns/format/link'
+      // Fetch all three locations where Sheets can store a link:
+      // hyperlink = plain cell-level link
+      // textFormatRuns = run-level link (older format)
+      // richTextValue  = run-level link (newer format, used by Drive smart chips)
+      fields: 'sheets/data/rowData/values/hyperlink,' +
+              'sheets/data/rowData/values/textFormatRuns/format/link,' +
+              'sheets/data/rowData/values/richTextValue/textRuns/textFormat/link'
     });
     var rowData = (resp.sheets[0].data[0].rowData || []);
     sheetsHyperlinks = rowData.map(function(row) {
       return (row.values || []).map(function(cell) {
+        // 1. Plain cell-level hyperlink
         if (cell.hyperlink) return cell.hyperlink;
+        // 2. textFormatRuns (older run-level links)
         var runs = cell.textFormatRuns || [];
         for (var r = 0; r < runs.length; r++) {
           var link = runs[r].format && runs[r].format.link;
           if (link && link.uri) return link.uri;
+        }
+        // 3. richTextValue.textRuns (Drive file smart chips)
+        var rtv = cell.richTextValue;
+        if (rtv && rtv.textRuns) {
+          for (var r = 0; r < rtv.textRuns.length; r++) {
+            var tf = rtv.textRuns[r].textFormat;
+            if (tf && tf.link && tf.link.uri) return tf.link.uri;
+          }
         }
         return '';
       });
@@ -345,11 +361,15 @@ function debugPronunciationGuide() {
     lines.push('\nloadPronunciationGuide() threw: ' + e.message);
   }
 
-  // 3. Raw Sheets API dump for the audio column (first 8 data rows)
+  // 3. Raw Sheets API dump for the audio column — shows ALL fields so we can
+  //    see exactly where the link is stored regardless of format
   try {
     var resp = Sheets.Spreadsheets.get(PRONUNCIATION_CONFIG.guideSheetId, {
       ranges: [PRONUNCIATION_CONFIG.guideTabName],
-      fields: 'sheets/data/rowData/values/hyperlink,sheets/data/rowData/values/textFormatRuns/format/link,sheets/data/rowData/values/formattedValue'
+      fields: 'sheets/data/rowData/values/hyperlink,' +
+              'sheets/data/rowData/values/textFormatRuns/format/link,' +
+              'sheets/data/rowData/values/richTextValue/textRuns/textFormat/link,' +
+              'sheets/data/rowData/values/formattedValue'
     });
     var rowData = resp.sheets[0].data[0].rowData || [];
     var audioColFallback = columnLetterToIndex(PRONUNCIATION_CONFIG.audioLinkColumnFallback) - 1;
@@ -357,15 +377,12 @@ function debugPronunciationGuide() {
     for (var i = 1; i <= Math.min(8, rowData.length - 1); i++) {
       var row = rowData[i] || {};
       var cell = (row.values || [])[audioColFallback] || {};
-      var url = cell.hyperlink || '';
-      if (!url) {
-        var runs = cell.textFormatRuns || [];
-        for (var r = 0; r < runs.length; r++) {
-          var l = runs[r].format && runs[r].format.link;
-          if (l && l.uri) { url = l.uri; break; }
-        }
-      }
-      lines.push('  row ' + (i + 1) + ': "' + (cell.formattedValue || '') + '" → ' + (url || '(none)'));
+      var parts = ['"' + (cell.formattedValue || '') + '"'];
+      if (cell.hyperlink)         parts.push('hyperlink=' + cell.hyperlink);
+      if (cell.textFormatRuns)    parts.push('textFormatRuns=' + JSON.stringify(cell.textFormatRuns));
+      if (cell.richTextValue)     parts.push('richTextValue=' + JSON.stringify(cell.richTextValue));
+      if (parts.length === 1)     parts.push('(no link fields found)');
+      lines.push('  row ' + (i + 1) + ': ' + parts.join(' | '));
     }
   } catch (e) {
     lines.push('\nRaw dump error: ' + e.message);
