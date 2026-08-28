@@ -288,12 +288,16 @@ function loadPronunciationGuide() {
     });
   }
 
-  // DriveApp fallback: for any entry that still has no URL but has a display
-  // text (the filename shown in the cell), search Drive for a file with that
-  // name. One broad search covers all entries — no per-file API calls.
-  var needsDrive = entries.some(function(e) { return !e.audioUrl && e.audioDisplayText; });
-  if (needsDrive) {
-    var driveMap = buildDriveAudioMap();
+  // DriveApp fallback: for entries that still have no URL, collect the unique
+  // display texts (filenames) and search Drive only for those exact names,
+  // in batches of 30 to keep query strings short.
+  var missing = {};
+  entries.forEach(function(e) {
+    if (!e.audioUrl && e.audioDisplayText) missing[e.audioDisplayText] = true;
+  });
+  var missingNames = Object.keys(missing);
+  if (missingNames.length > 0) {
+    var driveMap = buildDriveAudioMap(missingNames);
     entries.forEach(function(e) {
       if (!e.audioUrl && e.audioDisplayText) {
         e.audioUrl = driveMap[e.audioDisplayText] || '';
@@ -301,27 +305,30 @@ function loadPronunciationGuide() {
     });
   }
 
-  // Strip the temporary display-text field before returning
   entries.forEach(function(e) { delete e.audioDisplayText; });
   return entries;
 }
 
-// Searches Drive for audio files and returns a map of filename → web URL.
-// Covers My Drive and Shared Drives the user has access to.
-function buildDriveAudioMap() {
+// Searches Drive for files whose names match the given list, in batches of 30.
+// Returns a map of filename → web URL.
+function buildDriveAudioMap(filenames) {
   var map = {};
-  try {
-    var files = DriveApp.searchFiles(
-      '(mimeType contains "audio/" or ' +
-      ' title contains ".wav" or title contains ".mp3" or title contains ".m4a") ' +
-      'and trashed = false'
-    );
-    while (files.hasNext()) {
-      var f = files.next();
-      map[f.getName()] = f.getUrl();
+  var BATCH = 30;
+  for (var start = 0; start < filenames.length; start += BATCH) {
+    var batch = filenames.slice(start, start + BATCH);
+    var query = batch.map(function(n) {
+      return 'title = "' + n.replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"';
+    }).join(' or ');
+    query += ' and trashed = false';
+    try {
+      var files = DriveApp.searchFiles(query);
+      while (files.hasNext()) {
+        var f = files.next();
+        map[f.getName()] = f.getUrl();
+      }
+    } catch (e) {
+      Logger.log('DriveApp batch search failed: ' + e.message);
     }
-  } catch (e) {
-    Logger.log('DriveApp audio search failed: ' + e.message);
   }
   return map;
 }
@@ -384,15 +391,23 @@ function debugPronunciationGuide() {
     lines.push('Sheets API ERROR: ' + e.message + ' (DriveApp fallback will be used)');
   }
 
-  // 2. DriveApp audio search
+  // 2. DriveApp search (using the first 5 audio filenames from the guide as a probe)
   try {
-    var driveMap = buildDriveAudioMap();
-    var driveCount = Object.keys(driveMap).length;
-    lines.push('\nDriveApp audio files found: ' + driveCount);
-    if (driveCount > 0) {
-      var sample = Object.keys(driveMap).slice(0, 5);
-      sample.forEach(function(k) { lines.push('  ' + k + ' → ' + driveMap[k]); });
+    var guideSheet = SpreadsheetApp.openById(PRONUNCIATION_CONFIG.guideSheetId)
+                       .getSheetByName(PRONUNCIATION_CONFIG.guideTabName);
+    var guideVals  = guideSheet ? guideSheet.getDataRange().getValues() : [];
+    var audioColIdx = columnLetterToIndex(PRONUNCIATION_CONFIG.audioLinkColumnFallback) - 1;
+    var probeNames = [];
+    for (var ri = 1; ri < guideVals.length && probeNames.length < 5; ri++) {
+      var txt = String(guideVals[ri][audioColIdx] || '').trim();
+      if (txt) probeNames.push(txt);
     }
+    lines.push('\nProbing DriveApp for: ' + JSON.stringify(probeNames));
+    var driveMap = buildDriveAudioMap(probeNames);
+    var driveCount = Object.keys(driveMap).length;
+    lines.push('DriveApp matches: ' + driveCount + ' of ' + probeNames.length);
+    Object.keys(driveMap).forEach(function(k) { lines.push('  ' + k + ' → ' + driveMap[k]); });
+    if (driveCount === 0) lines.push('  → files may be in a Shared Drive not reachable by DriveApp');
   } catch (e) {
     lines.push('\nDriveApp ERROR: ' + e.message);
   }
