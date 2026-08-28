@@ -110,6 +110,34 @@ async function fetchModelList(cfg) {
   throw new Error(`Could not list models (${errs.join('; ')}).`);
 }
 
+/* A model is "recommended" if it looks like Sonnet 5 or DeepSeek V4 Pro —
+   the two the tool has been verified against. Anything else still works,
+   it just isn't singled out. */
+function isRecommendedModel(id) {
+  return /claude.*sonnet.*5(?!\d)|sonnet.5(?!\d)/i.test(id) || /deepseek.*v4.*pro/i.test(id);
+}
+
+function renderModelList(ids) {
+  const listEl = document.getElementById('modelList');
+  const recommended = ids.filter(isRecommendedModel);
+  const rest = ids.filter(id => !isRecommendedModel(id));
+  const row = (id, tag) => `<button type="button" class="model-item" data-id="${escapeHtml(id)}">${tag}${escapeHtml(id)}</button>`;
+  listEl.innerHTML =
+    recommended.map(id => row(id, '★ ')).join('') +
+    rest.map(id => row(id, '')).join('');
+  listEl.style.display = ids.length ? 'block' : 'none';
+  return recommended;
+}
+
+document.getElementById('modelList').addEventListener('click', async (e) => {
+  const btn = e.target.closest('.model-item');
+  if (!btn) return;
+  document.getElementById('modelInput').value = btn.dataset.id;
+  await chrome.storage.local.set({ apiModel: btn.dataset.id });
+  document.querySelectorAll('#modelList .model-item').forEach(b => b.classList.toggle('active', b === btn));
+  setEndpointStatus(`Selected "${btn.dataset.id}". Now click Save & Test.`);
+});
+
 document.getElementById('findModels').addEventListener('click', async () => {
   const raw = document.getElementById('endpointInput').value.trim();
   await chrome.storage.local.set({
@@ -122,18 +150,15 @@ document.getElementById('findModels').addEventListener('click', async () => {
     if (!cfg.apiKey) { setEndpointStatus('Save your API key first (the box at the top).', 'err'); return; }
     const ids = await fetchModelList(cfg);
 
-    document.getElementById('modelOptions').innerHTML =
-      ids.map(id => `<option value="${escapeHtml(id)}"></option>`).join('');
-
-    // Prefer a Claude model, newest-looking first, so the box is usable as-is.
-    const claude = ids.filter(id => /claude/i.test(id)).sort().reverse();
-    const pick = claude[0] || ids[0];
+    const recommended = renderModelList(ids);
+    const pick = recommended[0] || ids[0];
     document.getElementById('modelInput').value = pick;
     await chrome.storage.local.set({ apiModel: pick });
+    document.querySelectorAll('#modelList .model-item').forEach(b => b.classList.toggle('active', b.dataset.id === pick));
+
     setEndpointStatus(
-      `✓ ${ids.length} model${ids.length > 1 ? 's' : ''} available. Filled in "${pick}"` +
-      (claude.length > 1 ? ` — click the Model box to see the other ${claude.length - 1} Claude option${claude.length > 2 ? 's' : ''}.` : '.') +
-      ' Now click Save & Test.', 'ok');
+      `✓ ${ids.length} model${ids.length > 1 ? 's' : ''} available — all listed below (★ = recommended: Sonnet 5 or DeepSeek V4 Pro). ` +
+      `Selected "${pick}". Click a different one to switch, or click Save & Test to use this.`, 'ok');
   } catch (err) {
     setEndpointStatus('✗ ' + err.message + ' Ask your IT team which model name to use, and type it into the Model box.', 'err');
   }
@@ -144,6 +169,8 @@ document.getElementById('resetEndpoint').addEventListener('click', () => {
     document.getElementById('endpointInput').value = '';
     document.getElementById('modelInput').value = '';
     document.getElementById('authStyleSelect').value = 'auto';
+    document.getElementById('modelList').style.display = 'none';
+    document.getElementById('modelList').innerHTML = '';
     setEndpointStatus('Reset — using the public Anthropic API.', 'ok');
   });
 });

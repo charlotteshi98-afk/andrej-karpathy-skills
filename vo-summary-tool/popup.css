@@ -122,6 +122,33 @@ html, body {
 .endpoint-row input:focus,
 .endpoint-row select:focus { border-color: var(--accent2); }
 .endpoint-actions { display: flex; gap: 6px; margin-bottom: 6px; }
+.model-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  max-height: 140px;
+  overflow-y: auto;
+  padding: 6px;
+  margin-bottom: 6px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.model-item {
+  font-family: 'Space Mono', monospace;
+  font-size: 10px;
+  padding: 4px 8px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--surface2);
+  color: var(--text);
+}
+.model-item:hover { border-color: var(--accent2); }
+.model-item.active {
+  background: var(--accent);
+  color: var(--bg);
+  border-color: var(--accent);
+}
 .endpoint-hint {
   font-size: 10px;
   line-height: 1.5;
