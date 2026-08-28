@@ -126,11 +126,34 @@ document.getElementById('saveEndpoint').addEventListener('click', async () => {
 
   await chrome.storage.local.set({ apiEndpoint: raw, apiModel: model, authStyle: style });
   setEndpointStatus('Saved — testing…');
+
+  const ping = () => callClaude('Reply with the single word: ok', 'ping');
   try {
-    await callClaude('Reply with the single word: ok', 'ping');
+    await ping();
     setEndpointStatus('✓ Connected. The endpoint answered correctly.', 'ok');
+    return;
   } catch (err) {
-    setEndpointStatus('✗ ' + err.message, 'err');
+    // A 404 means the host is right but the API is mounted elsewhere; try the
+    // usual gateway prefixes rather than making the user guess paths.
+    if (!raw || !/\(404\)|error 404|Endpoint not found/i.test(err.message)) {
+      setEndpointStatus('✗ ' + err.message, 'err');
+      return;
+    }
+    const root = raw.replace(/\/+$/, '');
+    const candidates = ['/anthropic', '/api/anthropic', '/api', '/claude', '/anthropic/v1'];
+    for (let i = 0; i < candidates.length; i++) {
+      const candidate = root + candidates[i];
+      setEndpointStatus(`Not found at that path — trying ${candidate}… (${i + 1}/${candidates.length})`);
+      await chrome.storage.local.set({ apiEndpoint: candidate });
+      try {
+        await ping();
+        document.getElementById('endpointInput').value = candidate;
+        setEndpointStatus(`✓ Connected — the API lives at ${candidate}. Saved that for you.`, 'ok');
+        return;
+      } catch (e2) { /* try the next prefix */ }
+    }
+    await chrome.storage.local.set({ apiEndpoint: raw });
+    setEndpointStatus(`✗ Reached ${root}, but could not find the Claude API there. Ask your IT team for the exact endpoint path and model name.`, 'err');
   }
 });
 
