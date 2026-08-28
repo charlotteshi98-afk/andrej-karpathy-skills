@@ -198,58 +198,6 @@ function loadPronunciationGuide() {
   var richValues = range.getRichTextValues();
   var formulas   = range.getFormulas(); // fallback for =HYPERLINK() cells
 
-  // Drive file smart chips store their URL in fields that getRichTextValues()
-  // does not expose. We call the Sheets REST API directly with the script's
-  // own OAuth token (no separate Advanced Service needed) to read all three
-  // locations where Sheets can store a link URL.
-  var sheetsHyperlinks = null;
-  var sheetsApiError = '';
-  try {
-    var apiUrl = 'https://sheets.googleapis.com/v4/spreadsheets/' +
-      encodeURIComponent(PRONUNCIATION_CONFIG.guideSheetId) +
-      '?ranges=' + encodeURIComponent(PRONUNCIATION_CONFIG.guideTabName) +
-      '&fields=' + encodeURIComponent(
-        'sheets/data/rowData/values/hyperlink,' +
-        'sheets/data/rowData/values/textFormatRuns/format/link,' +
-        'sheets/data/rowData/values/richTextValue/textRuns/textFormat/link'
-      ) +
-      '&includeGridData=true';
-    var apiResp = UrlFetchApp.fetch(apiUrl, {
-      headers: { 'Authorization': 'Bearer ' + ScriptApp.getOAuthToken() },
-      muteHttpExceptions: true
-    });
-    if (apiResp.getResponseCode() !== 200) {
-      throw new Error('Sheets API returned HTTP ' + apiResp.getResponseCode() + ': ' +
-                      apiResp.getContentText().slice(0, 300));
-    } else {
-      var resp = JSON.parse(apiResp.getContentText());
-      var rowData = (resp.sheets[0].data[0].rowData || []);
-      sheetsHyperlinks = rowData.map(function(row) {
-        return (row.values || []).map(function(cell) {
-          // 1. Plain cell-level hyperlink
-          if (cell.hyperlink) return cell.hyperlink;
-          // 2. textFormatRuns (older run-level links)
-          var runs = cell.textFormatRuns || [];
-          for (var r = 0; r < runs.length; r++) {
-            var link = runs[r].format && runs[r].format.link;
-            if (link && link.uri) return link.uri;
-          }
-          // 3. richTextValue.textRuns (Drive file smart chips)
-          var rtv = cell.richTextValue;
-          if (rtv && rtv.textRuns) {
-            for (var r2 = 0; r2 < rtv.textRuns.length; r2++) {
-              var tf = rtv.textRuns[r2].textFormat;
-              if (tf && tf.link && tf.link.uri) return tf.link.uri;
-            }
-          }
-          return '';
-        });
-      });
-    }
-  } catch (e) {
-    sheetsApiError = e.message;
-  }
-
   var headerRowIdx = -1, nameCol = -1, pronCol = -1, notesCol = -1, audioCol = -1;
   for (var r = 0; r < values.length; r++) {
     for (var c = 0; c < values[r].length; c++) {
@@ -268,6 +216,13 @@ function loadPronunciationGuide() {
     audioCol = columnLetterToIndex(PRONUNCIATION_CONFIG.audioLinkColumnFallback) - 1; // convert to 0-indexed
   }
 
+  // Fetch the audio column's raw cell data from the Sheets REST API. Drive file
+  // smart chips (the "▪ Cissia.wav" cells) do NOT store their URL anywhere that
+  // getRichTextValues() can see — it lives in chipRuns[].chip.richLinkProperties.uri.
+  // We request the single column with no `fields` mask so every link-bearing
+  // field comes back regardless of which format the chip uses.
+  var apiCells = fetchAudioColumnCells(audioCol);
+
   var entries = [];
   for (var i = headerRowIdx + 1; i < values.length; i++) {
     var name = String(values[i][nameCol] || '').trim();
@@ -276,10 +231,9 @@ function loadPronunciationGuide() {
     var audioUrl = '';
     var audioDisplayText = '';
     if (audioCol > -1) {
-      // Try Sheets API first (handles plain hyperlinks and =HYPERLINK() formulas)
-      if (sheetsHyperlinks && sheetsHyperlinks[i] && sheetsHyperlinks[i][audioCol]) {
-        audioUrl = sheetsHyperlinks[i][audioCol];
-      } else {
+      // Sheets API first (handles smart chips, plain links and =HYPERLINK()).
+      audioUrl = extractUrlFromApiCell(apiCells[i]);
+      if (!audioUrl) {
         audioUrl = extractCellUrl(richValues[i][audioCol], formulas[i][audioCol]);
       }
       audioDisplayText = String(values[i][audioCol] || '').trim();
@@ -296,6 +250,75 @@ function loadPronunciationGuide() {
 
   entries.forEach(function(e) { delete e.audioDisplayText; });
   return entries;
+}
+
+// Converts a 0-indexed column number to its letter (0 → A, 27 → AB).
+function columnIndexToLetter(idx) {
+  var letter = '';
+  for (var n = idx + 1; n > 0; n = Math.floor((n - 1) / 26)) {
+    letter = String.fromCharCode(65 + ((n - 1) % 26)) + letter;
+  }
+  return letter;
+}
+
+// Reads the audio column's raw CellData from the Sheets REST API, using the
+// script's own OAuth token (no Advanced Service needed). Returns an array
+// indexed the same as the sheet's rows (index 0 = row 1). Returns [] on failure
+// so the caller can fall back to rich-text extraction.
+function fetchAudioColumnCells(audioCol) {
+  if (audioCol < 0) return [];
+  var col = columnIndexToLetter(audioCol);
+  var range = PRONUNCIATION_CONFIG.guideTabName + '!' + col + ':' + col;
+  var apiUrl = 'https://sheets.googleapis.com/v4/spreadsheets/' +
+    encodeURIComponent(PRONUNCIATION_CONFIG.guideSheetId) +
+    '?includeGridData=true&ranges=' + encodeURIComponent(range);
+  var resp = UrlFetchApp.fetch(apiUrl, {
+    headers: { 'Authorization': 'Bearer ' + ScriptApp.getOAuthToken() },
+    muteHttpExceptions: true
+  });
+  if (resp.getResponseCode() !== 200) {
+    throw new Error('Sheets API HTTP ' + resp.getResponseCode() + ': ' +
+                    resp.getContentText().slice(0, 300));
+  }
+  var data = JSON.parse(resp.getContentText());
+  var rowData = (data.sheets[0].data[0].rowData || []);
+  return rowData.map(function(row) { return (row.values || [])[0] || {}; });
+}
+
+// Pulls a URL out of a Sheets API CellData object. Sheets stores links in four
+// different places depending on how they were created:
+//   1. chipRuns  — Drive file / smart chips (what this guide uses)
+//   2. hyperlink — plain cell-level link, incl. =HYPERLINK() formulas
+//   3. textFormatRuns — run-level link (older format)
+//   4. richTextValue.textRuns — run-level link (newer format)
+function extractUrlFromApiCell(cell) {
+  if (!cell) return '';
+
+  var chips = cell.chipRuns || [];
+  for (var c = 0; c < chips.length; c++) {
+    var chip = chips[c].chip;
+    if (chip && chip.richLinkProperties && chip.richLinkProperties.uri) {
+      return chip.richLinkProperties.uri;
+    }
+  }
+
+  if (cell.hyperlink) return cell.hyperlink;
+
+  var runs = cell.textFormatRuns || [];
+  for (var r = 0; r < runs.length; r++) {
+    var link = runs[r].format && runs[r].format.link;
+    if (link && link.uri) return link.uri;
+  }
+
+  var rtv = cell.richTextValue;
+  if (rtv && rtv.textRuns) {
+    for (var t = 0; t < rtv.textRuns.length; t++) {
+      var tf = rtv.textRuns[t].textFormat;
+      if (tf && tf.link && tf.link.uri) return tf.link.uri;
+    }
+  }
+
+  return '';
 }
 
 // Extracts a hyperlink URL from a cell. Checks rich-text runs first — Drive-
@@ -346,75 +369,38 @@ function debugPronunciationGuide() {
   var ui = SpreadsheetApp.getUi();
   var lines = [];
 
-  // 1. Sheets API availability
-  try {
-    var testResp = Sheets.Spreadsheets.get(PRONUNCIATION_CONFIG.guideSheetId, {
-      fields: 'spreadsheetId'
-    });
-    lines.push('Sheets API: OK (spreadsheetId=' + testResp.spreadsheetId + ')');
-  } catch (e) {
-    lines.push('Sheets API ERROR: ' + e.message + ' (DriveApp fallback will be used)');
-  }
+  var audioCol = columnLetterToIndex(PRONUNCIATION_CONFIG.audioLinkColumnFallback) - 1;
 
-  // 2. DriveApp search (using the first 5 audio filenames from the guide as a probe)
+  // 1. Raw API dump of the first few audio cells. The full JSON goes to the
+  //    execution log (View → Logs) because it's too long for a dialog.
   try {
-    var guideSheet = SpreadsheetApp.openById(PRONUNCIATION_CONFIG.guideSheetId)
-                       .getSheetByName(PRONUNCIATION_CONFIG.guideTabName);
-    var guideVals  = guideSheet ? guideSheet.getDataRange().getValues() : [];
-    var audioColIdx = columnLetterToIndex(PRONUNCIATION_CONFIG.audioLinkColumnFallback) - 1;
-    var probeNames = [];
-    for (var ri = 1; ri < guideVals.length && probeNames.length < 5; ri++) {
-      var txt = String(guideVals[ri][audioColIdx] || '').trim();
-      if (txt) probeNames.push(txt);
+    var cells = fetchAudioColumnCells(audioCol);
+    lines.push('Sheets API: OK — ' + cells.length + ' cells read from column ' +
+               PRONUNCIATION_CONFIG.audioLinkColumnFallback);
+    lines.push('\nFirst 5 audio cells (top-level fields present):');
+    for (var i = 1; i <= Math.min(5, cells.length - 1); i++) {
+      var cell = cells[i] || {};
+      var keys = Object.keys(cell).join(', ') || '(empty cell)';
+      lines.push('  row ' + (i + 1) + ': "' + (cell.formattedValue || '') + '"');
+      lines.push('    fields: ' + keys);
+      lines.push('    URL:    ' + (extractUrlFromApiCell(cell) || '(none found)'));
+      Logger.log('row ' + (i + 1) + ' raw JSON:\n' + JSON.stringify(cell, null, 2));
     }
-    lines.push('\nProbing DriveApp for: ' + JSON.stringify(probeNames));
-    var driveMap = buildDriveAudioMap(probeNames);
-    var driveCount = Object.keys(driveMap).length;
-    lines.push('DriveApp matches: ' + driveCount + ' of ' + probeNames.length);
-    Object.keys(driveMap).forEach(function(k) { lines.push('  ' + k + ' → ' + driveMap[k]); });
-    if (driveCount === 0) lines.push('  → files may be in a Shared Drive not reachable by DriveApp');
+    lines.push('\nFull JSON for these cells is in View → Logs.');
   } catch (e) {
-    lines.push('\nDriveApp ERROR: ' + e.message);
+    lines.push('Sheets API ERROR: ' + e.message);
   }
 
-  // 3. Load entries and show first 8 with their resolved audioUrl
+  // 2. Load entries and show the first 8 with their resolved audioUrl
   try {
     var entries = loadPronunciationGuide();
-    lines.push('\nEntries loaded: ' + entries.length);
-    lines.push('First 8 with audio:');
-    var sample = entries.slice(0, 8);
-    sample.forEach(function(e) {
+    var withUrl = entries.filter(function(e) { return e.audioUrl; }).length;
+    lines.push('\nEntries loaded: ' + entries.length + ' (' + withUrl + ' with a URL)');
+    entries.slice(0, 8).forEach(function(e) {
       lines.push('  ' + e.name + ' → ' + (e.audioUrl || '(no URL found)'));
     });
   } catch (e) {
     lines.push('\nloadPronunciationGuide() threw: ' + e.message);
-  }
-
-  // 3. Raw Sheets API dump for the audio column — shows ALL fields so we can
-  //    see exactly where the link is stored regardless of format
-  try {
-    var resp = Sheets.Spreadsheets.get(PRONUNCIATION_CONFIG.guideSheetId, {
-      ranges: [PRONUNCIATION_CONFIG.guideTabName],
-      fields: 'sheets/data/rowData/values/hyperlink,' +
-              'sheets/data/rowData/values/textFormatRuns/format/link,' +
-              'sheets/data/rowData/values/richTextValue/textRuns/textFormat/link,' +
-              'sheets/data/rowData/values/formattedValue'
-    });
-    var rowData = resp.sheets[0].data[0].rowData || [];
-    var audioColFallback = columnLetterToIndex(PRONUNCIATION_CONFIG.audioLinkColumnFallback) - 1;
-    lines.push('\nRaw Sheets API — audio column (rows 2–9):');
-    for (var i = 1; i <= Math.min(8, rowData.length - 1); i++) {
-      var row = rowData[i] || {};
-      var cell = (row.values || [])[audioColFallback] || {};
-      var parts = ['"' + (cell.formattedValue || '') + '"'];
-      if (cell.hyperlink)         parts.push('hyperlink=' + cell.hyperlink);
-      if (cell.textFormatRuns)    parts.push('textFormatRuns=' + JSON.stringify(cell.textFormatRuns));
-      if (cell.richTextValue)     parts.push('richTextValue=' + JSON.stringify(cell.richTextValue));
-      if (parts.length === 1)     parts.push('(no link fields found)');
-      lines.push('  row ' + (i + 1) + ': ' + parts.join(' | '));
-    }
-  } catch (e) {
-    lines.push('\nRaw dump error: ' + e.message);
   }
 
   ui.alert('Pronunciation Guide Debug', lines.join('\n'), ui.ButtonSet.OK);
