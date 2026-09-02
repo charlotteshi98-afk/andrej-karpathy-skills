@@ -1,15 +1,21 @@
-# Terms of address — how characters address one another.
-# Columns (tab-separated):  CN Term <TAB> EN Term <TAB> Used by / Context <TAB> Notes
-# Only the first two columns are required; the rest may be left empty.
+# Terms of address & speech habits — how characters address one another, and how they write.
+# Columns (tab-separated), mirroring the source spreadsheet so a re-export drops straight in:
+#   Ver. Added <TAB> Character <TAB> Refers To <TAB> CN Term <TAB> EN Term <TAB> Notes <TAB> Examples
+#
+# A row needs a Character. CN Term / EN Term may be empty: such a row is a pure speech-habit
+# entry (how that character texts or speaks) rather than a form of address, and is always
+# injected rather than matched against the source text. Rows whose Character is "General" are
+# project-wide and are likewise always injected.
+# Literal \n inside a cell means a line break in the original cell; it renders as " / ".
 # Blank lines and lines starting with # are ignored.
 # Edit this file, then reload the extension at chrome://extensions to pick up changes.
 #
-# Used by: Glossary extraction (address terms are still extracted, but usage that
-# contradicts this table is flagged) and Consistency Check (a contradicting form of
-# address is reported as an inconsistency).
+# Used by: Glossary extraction (address terms are still extracted, but usage contradicting a
+# convention here is flagged) and Consistency Check (a contradicting form of address is
+# reported as an inconsistency).
 #
 # Replace the example rows below with your project's real conventions.
-CN Term	EN Term	Used by / Context	Notes
-哥哥	Wise	妹妹 addressing her brother	Use the name, not a kinship term — EN audiences read "brother" as literal
-前辈	Boss	junior staff addressing a senior	Never "senpai"
-先生	sir	formal address to an older man	Lowercase unless it opens a sentence
+Ver. Added	Character	Refers To	CN Term	EN Term	Notes	Examples
+1	Ayla	Player	队长大人	Captain	Always capitalize when used as direct address.	请下令吧，队长大人。Give the word, Captain.
+1	Ayla	DMs			Ayla texts casually: lowercase, abbreviations, no ending periods.
+1	General	Drones	它	They/Them	Unless a gender is specified, use they/them for drones.

@@ -634,13 +634,15 @@ document.getElementById('scanSheetBtn').addEventListener('click', async () => {
 /* ================================================================
    REFERENCE ASSETS (bundled files, no upload)
    ================================================================ */
-/* Split a reference TSV into rows, dropping blank lines, # comments and a
-   header row. Comments let each file document its own format. */
-function parseTsv(text) {
+/* Split a reference TSV into rows, dropping blank lines, # comments and the
+   header row (identified by its first cell). Comments let each file document
+   its own format. A literal \n in a cell was a line break in the source
+   spreadsheet; render it as a separator rather than breaking the TSV. */
+function parseTsv(text, headerFirstCell) {
   return text.split(/\r?\n/)
     .filter(line => line.trim() && !line.trim().startsWith('#'))
-    .map(line => line.split('\t').map(c => c.trim()))
-    .filter((cells, i) => !(i === 0 && normLabel(cells[0]) === 'cnterm'));
+    .map(line => line.split('\t').map(c => c.trim().replace(/\\n/g, ' / ')))
+    .filter((cells, i) => !(i === 0 && normLabel(cells[0]) === normLabel(headerFirstCell)));
 }
 
 async function fetchReference(path) {
@@ -655,15 +657,20 @@ async function loadReferenceAssets() {
   const problems = [];
 
   try {
-    const rows = parseTsv(await fetchReference('reference/term-base.tsv'));
+    const rows = parseTsv(await fetchReference('reference/term-base.tsv'), 'CN Term');
     bundledTermBase = new Map(rows.filter(r => r[0] && r[1]).map(r => [r[0], r[1]]));
   } catch (e) { problems.push(e.message); }
 
   try {
-    const rows = parseTsv(await fetchReference('reference/terms-of-address.tsv'));
+    // Ver. Added | Character | Refers To | CN Term | EN Term | Notes | Examples
+    const rows = parseTsv(await fetchReference('reference/terms-of-address.tsv'), 'Ver. Added');
     termsOfAddress = rows
-      .filter(r => r[0] && r[1])
-      .map(r => ({ cn: r[0], en: r[1], context: r[2] || '', notes: r[3] || '' }));
+      .filter(r => r[1])   // a row is only usable if it names a character
+      .map(r => ({
+        character: r[1], refersTo: r[2] || '',
+        cn: r[3] || '', en: r[4] || '',
+        notes: r[5] || '', example: r[6] || '',
+      }));
   } catch (e) { problems.push(e.message); }
 
   try {
@@ -744,15 +751,29 @@ function trackerMatchText(lines) {
     .join('\n');
 }
 
-/* Terms of address relevant to the given text, as a prompt block. */
+/* A row is a speech-habit entry (how a character writes or speaks) rather than a
+   form of address when it carries no CN/EN term — only a note. */
+const isSpeechHabit = t => !t.cn && !t.en;
+
+/* Terms of address and speech habits relevant to the given text, as a prompt block.
+   Speech habits and project-wide ("General") conventions have no term to match on
+   and apply throughout, so they are always included; everything else must actually
+   appear in the source. */
 function buildAddressRef(sourceText, maxTerms = 200) {
-  const relevant = termsOfAddress
-    .filter(t => sourceText.includes(t.cn) || sourceText.includes(t.en))
-    .slice(0, maxTerms);
+  const relevant = termsOfAddress.filter(t =>
+    isSpeechHabit(t) || t.character === 'General' ||
+    (t.cn && sourceText.includes(t.cn)) || (t.en && sourceText.includes(t.en)) ||
+    sourceText.includes(t.character) || (t.refersTo && sourceText.includes(t.refersTo))
+  ).slice(0, maxTerms);
   if (!relevant.length) return '';
-  const rows = relevant.map(t =>
-    `${t.cn} → ${t.en}${t.context ? ` (${t.context})` : ''}${t.notes ? ` — ${t.notes}` : ''}`);
-  return `\n\nTerms of address — the established conventions for how characters address one another:\n${rows.join('\n')}`;
+
+  const rows = relevant.map(t => isSpeechHabit(t)
+    ? `${t.character} — speech habit${t.refersTo ? ` (${t.refersTo})` : ''}: ${t.notes}` +
+      (t.example ? ` e.g. ${t.example}` : '')
+    : `${t.character}${t.refersTo ? ` → ${t.refersTo}` : ''}: ${t.cn} → "${t.en}"` +
+      (t.notes ? ` — ${t.notes}` : '') + (t.example ? ` e.g. ${t.example}` : ''));
+
+  return `\n\nTerms of address and speech habits — established conventions for how characters address one another and how they write. "General" applies to every speaker:\n${rows.join('\n')}`;
 }
 
 function buildStyleGuideRef() {

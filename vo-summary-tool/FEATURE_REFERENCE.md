@@ -78,13 +78,31 @@ reaches them without `web_accessible_resources`.
 | File | Format |
 |---|---|
 | `reference/term-base.tsv` | `CN Term` ⇥ `EN Term` |
-| `reference/terms-of-address.tsv` | `CN Term` ⇥ `EN Term` ⇥ `Used by / Context` ⇥ `Notes` |
+| `reference/terms-of-address.tsv` | `Ver. Added` ⇥ `Character` ⇥ `Refers To` ⇥ `CN Term` ⇥ `EN Term` ⇥ `Notes` ⇥ `Examples` |
 | `reference/style-guide.md` | Free prose; everything above the first `---` rule is a format header and is stripped |
 
-`parseTsv()` drops blank lines, `#` comments, and a header row whose first cell normalizes to
-`cnterm`. A missing or comment-only file is not an error — the prompts simply carry no reference
-block. The Glossary tab shows a one-line read-only status (`N terms · M address forms · style guide
-loaded`) or the parse error; this is the only place a malformed TSV becomes visible.
+`parseTsv(text, headerFirstCell)` drops blank lines, `#` comments, and the header row identified by
+its first cell. A missing or comment-only file is not an error — the prompts simply carry no
+reference block. The Glossary tab shows a one-line read-only status (`N terms · M address forms ·
+style guide loaded`) or the parse error; this is the only place a malformed TSV becomes visible.
+
+**Terms of address & speech habits.** The layout mirrors the source spreadsheet 1:1 so a re-export
+drops straight in — `Ver. Added` is carried for provenance and never injected. A row is usable if it
+names a `Character`. Two kinds of row:
+
+- **Address term** — has a CN and EN term. Rendered as
+  `Character → Refers To: CN → "EN" — Notes e.g. Example`.
+- **Speech habit** — has no CN/EN term, only a note describing how that character writes or speaks
+  (texts in lowercase, leans on ellipses, omits punctuation entirely). Rendered as
+  `Character — speech habit (Refers To): Notes`.
+
+A cell that held a line break in the spreadsheet stores it as a literal `\n` and renders as ` / `,
+since TSV is line-oriented.
+
+**Relevance.** Speech habits and rows whose `Character` is `General` apply project-wide and have no
+term to match on, so they are **always** included. Every other row must have its CN term, EN term,
+`Character`, or `Refers To` appear in the source text. Fully matched, the block runs ~6 KB
+(~1,900 tokens); with no matches it is ~2.7 KB of habits and General conventions.
 
 **Term base assembly.** `effectiveTermBase()` merges two sources:
 1. `autoGlossaryFromTracker(enLines)` — derived from a loaded EN tracker with no API call:
@@ -98,7 +116,7 @@ loaded`) or the parse error; this is the only place a malformed TSV becomes visi
 | Asset | Summary | Comprehensive | Structured | Glossary | Consistency |
 |---|---|---|---|---|---|
 | Term base | English output only | English output only | English mode only | skip list | skip rule |
-| Terms of address | — | — | — | flag conflicts | flag conflicts |
+| Terms of address & speech habits | — | — | — | flag conflicts | flag conflicts |
 | Style guide | — | — | — | option reasoning | Recommended line |
 
 中文-output summaries deliberately receive no glossary — the term base is CN→EN and would only

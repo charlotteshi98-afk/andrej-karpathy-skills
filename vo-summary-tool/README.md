@@ -46,7 +46,7 @@ no upload step — edit the file, then reload the extension at `chrome://extensi
 | File | What goes in it |
 |---|---|
 | `reference/term-base.tsv` | Approved CN → EN translations, one per line, tab-separated |
-| `reference/terms-of-address.tsv` | How characters address one another: CN, EN, who says it to whom, notes |
+| `reference/terms-of-address.tsv` | How characters address one another **and** how they write. Columns mirror the source spreadsheet: Ver. Added, Character, Refers To, CN Term, EN Term, Notes, Examples — so you can re-export and drop it straight in. Leave CN/EN empty for a pure speech-habit row |
 | `reference/style-guide.md` | Free prose on register, punctuation, names, numbers |
 
 Blank lines and lines starting with `#` are ignored, so each file documents its own format at the
