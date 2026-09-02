@@ -1,0 +1,15 @@
+# Terms of address — how characters address one another.
+# Columns (tab-separated):  CN Term <TAB> EN Term <TAB> Used by / Context <TAB> Notes
+# Only the first two columns are required; the rest may be left empty.
+# Blank lines and lines starting with # are ignored.
+# Edit this file, then reload the extension at chrome://extensions to pick up changes.
+#
+# Used by: Glossary extraction (address terms are still extracted, but usage that
+# contradicts this table is flagged) and Consistency Check (a contradicting form of
+# address is reported as an inconsistency).
+#
+# Replace the example rows below with your project's real conventions.
+CN Term	EN Term	Used by / Context	Notes
+哥哥	Wise	妹妹 addressing her brother	Use the name, not a kinship term — EN audiences read "brother" as literal
+前辈	Boss	junior staff addressing a senior	Never "senpai"
+先生	sir	formal address to an older man	Lowercase unless it opens a sentence

@@ -68,15 +68,50 @@ Each parsed line is:
 
 ---
 
-### Term Base (`.xlsx` upload)
+### Reference Assets (bundled files — no upload)
 
-Read from the first sheet. Column A = CN term, Column B = EN translation.  
-Stored as `termBaseMap: Map<cnTerm, enTerm>` and **persisted in `chrome.storage.local`** — it survives closing the panel and is restored automatically on open. Used in:
-- Glossary extraction (CN keys excluded from extracted terms; filtered from results)
-- All English summary/analysis generation (Summary and Comprehensive, with or without an EN tracker)
-- Consistency Check (used as authoritative translations; deviations flagged first)
+Three files ship inside the extension under `reference/` and are loaded on open by
+`loadReferenceAssets()`. There is no upload UI: edit a file, then reload the extension at
+`chrome://extensions`. `popup.html` is an extension page, so `chrome.runtime.getURL` + `fetch`
+reaches them without `web_accessible_resources`.
 
-To save tokens, only glossary entries whose CN or EN term actually appears in the source text are injected into a prompt (capped at 300 entries).
+| File | Format |
+|---|---|
+| `reference/term-base.tsv` | `CN Term` ⇥ `EN Term` |
+| `reference/terms-of-address.tsv` | `CN Term` ⇥ `EN Term` ⇥ `Used by / Context` ⇥ `Notes` |
+| `reference/style-guide.md` | Free prose; everything above the first `---` rule is a format header and is stripped |
+
+`parseTsv()` drops blank lines, `#` comments, and a header row whose first cell normalizes to
+`cnterm`. A missing or comment-only file is not an error — the prompts simply carry no reference
+block. The Glossary tab shows a one-line read-only status (`N terms · M address forms · style guide
+loaded`) or the parse error; this is the only place a malformed TSV becomes visible.
+
+**Term base assembly.** `effectiveTermBase()` merges two sources:
+1. `autoGlossaryFromTracker(enLines)` — derived from a loaded EN tracker with no API call:
+   character-name pairs (`角色（中文）` → `Character`), plus short term-like rows where the CN cell
+   is ≤8 characters with no sentence punctuation and the EN cell is ≤6 words. Full dialogue lines
+   are excluded — they are sentences, not terms.
+2. `reference/term-base.tsv` — the curated file, which **wins on conflicting CN keys**.
+
+**Where each asset is used**
+
+| Asset | Summary | Comprehensive | Structured | Glossary | Consistency |
+|---|---|---|---|---|---|
+| Term base | English output only | English output only | English mode only | skip list | skip rule |
+| Terms of address | — | — | — | flag conflicts | flag conflicts |
+| Style guide | — | — | — | option reasoning | Recommended line |
+
+中文-output summaries deliberately receive no glossary — the term base is CN→EN and would only
+cost tokens there.
+
+To save tokens, only entries whose CN or EN term actually appears in the source text are injected
+(term base capped at 300 entries, terms of address at 200). Because the EN-with-tracker digest is
+English only, relevance is matched against `trackerMatchText()` — both sides of the tracker — so CN
+keys can still match.
+
+**Consistency Check uses the curated file alone**, not `effectiveTermBase()`: the tracker-derived
+glossary is built from the same unverified sheet data being audited, so trusting it would suppress
+the very inconsistencies the check exists to find.
 
 ---
 
@@ -103,9 +138,9 @@ The Scan button in the Summary tab fetches only the currently active sheet tab (
 
 | Language | EN tracker loaded? | Data used |
 |---|---|---|
-| 中文 | — | CN scenes → `buildScriptDigest()` |
-| English | Yes | EN tracker lines: `[VO ID] Character: Latest EN (or English Script)` |
-| English | No (falls back) | CN scenes → `buildScriptDigest()` + term base glossary |
+| 中文 | — | CN scenes → `buildScriptDigest()` (no glossary) |
+| English | Yes | EN tracker lines: `[VO ID] Character: Latest EN (or English Script)` + glossary |
+| English | No (falls back) | CN scenes → `buildScriptDigest()` + glossary |
 
 `buildScriptDigest(scenes)` formats each scene as:
 ```
@@ -122,10 +157,10 @@ The Scan button in the Summary tab fetches only the currently active sheet tab (
 
 **CN mode prompt summary**:
 > You are a senior game localization producer. Write a script analysis brief of ~N words in Simplified Chinese. Focus on: [pills]. Plain text only, flowing prose, section headers as 【…】. No markdown.
-> [+ Reference glossary if term base loaded]
 
 **EN with tracker prompt summary**:
 > Same role. Write ~N words in English. Focus on: [pills]. Plain text, flowing prose.
+> [+ Reference glossary, matched against `trackerMatchText(enLines)` so CN keys resolve]
 
 **EN without tracker prompt summary**:
 > Same role. The source is in Chinese — write the brief in English, translating as you go. Use the reference glossary for established terms. After the brief, add 【Terms needing unified translation】 listing any CN names/terms not covered by the glossary with the provisional English used.
@@ -153,7 +188,7 @@ For each segment: 1 Claude call.
 **Prompt (CN)**:
 > 你是一名剧本分析师。请用100–150个中文字总结这段配音剧本片段，涵盖剧情事件、角色、情感节奏与基调。纯文字，不要markdown符号。
 
-When running EN-without-tracker, the CN source is used and the segment prompt says to write the summary in English, including the reference glossary.
+The reference glossary is appended to the segment prompt in **both** English paths — with a tracker (matched against `trackerMatchText()`) and without one (matched against the CN digest). When running EN-without-tracker, the CN source is used and the segment prompt also says to write the summary in English. 中文 mode gets no glossary.
 
 ### Stage 2 — Final analysis
 
@@ -194,7 +229,7 @@ Scenes are grouped into batches of ~8 000 characters and each batch is sent in O
 **Prompt**:
 > For EACH scene output exactly one pipe-delimited line: `PID|summary`. The summary is ≤30 Chinese characters (中文 mode) or ≤20 English words (English mode) for a localization team, focusing on key emotional beats and story developments. Output ONLY the data lines.
 
-A 中文/English toggle next to Generate Table selects the output language for both the short descriptions (pass 1) and story summaries (pass 2). In English mode the reference glossary (if loaded) is injected into both prompts. Scenes with zero VO lines are prefixed `【无配音场景】` (or `[No VO]` in English mode).
+A 中文/English toggle next to Generate Table selects the output language for both the short descriptions (pass 1) and story summaries (pass 2). In English mode the reference glossary (if any) is injected into both prompts, and into the acts prompt. Scenes with zero VO lines are prefixed `【无配音场景】` (or `[No VO]` in English mode).
 
 ### Story roadmap — separate button (pass 1b)
 Two buttons share the same pipeline via `runStructured(withRoadmap)`:
@@ -225,7 +260,9 @@ Column widths are resizable (CSS `resize: horizontal` on `<th>`). Text wraps in 
 
 ### Input
 
-Full CN script digest. If term base is loaded: CN keys are listed in the prompt to skip; extracted results are also post-filtered to remove any term whose CN key is in the term base.
+Full CN script digest. If a term base is loaded: CN keys are listed in the prompt to skip; extracted results are also post-filtered to remove any term whose CN key is in the term base.
+
+Terms of address are **not** skipped this way — the script may use an address form that contradicts the standing convention, which is worth seeing. The table is injected as reference and the prompt asks the model to prefix such a term's `Context` with `⚠ 与称谓表不一致: ` followed by the convention it breaks. The style guide, if present, constrains the reasoning behind the three options.
 
 ### Claude call
 
@@ -237,6 +274,8 @@ Full CN script digest. If term base is loaded: CN keys are listed in the prompt 
 > Categories: Character Name / Location / Item / Skill / Faction / Cultural Term / Other
 > Options: 3 English translation candidates with brief reasoning
 > Output ONLY data lines, no header, no extra text. Extract 20–40 terms.
+> [+ Terms of address — still extract these, but flag script usage that contradicts them]
+> [+ Style guide — the option reasoning must comply with it]
 > [+ Term base: already translated — skip these CN terms]
 
 **Output columns displayed** (preview table, first 12 terms): CN Term · Category · Context · Option A · Option B · Option C.  
@@ -275,7 +314,11 @@ CN text → Map<EN text, Set<tab name>>
 ```
 De-duplication is per-tab (identical CN+EN pairs within a tab are counted once).
 
-Any CN text that maps to 2+ distinct EN texts is flagged as a direct conflict before Claude is involved.
+Any CN text that maps to 2+ distinct EN texts is a candidate direct conflict. A candidate whose CN key is in `reference/term-base.tsv` is then **dropped when every variant agrees with the base** — that term is settled, and reporting it is noise. It is kept only when some variant contradicts the base, tagged `deviatesFromBase` so the prompt can label it `[TERM BASE DEVIATION]` alongside the approved rendering.
+
+`sameTranslation(a, b)` decides agreement, ignoring case, surrounding whitespace, a leading article, and trailing punctuation — the same trivial differences the prompt is told to ignore.
+
+Only the curated `reference/term-base.tsv` counts here, never `effectiveTermBase()`: the tracker-derived glossary is built from this same unverified sheet data, so trusting it would suppress the very inconsistencies the check exists to find.
 
 ### Step 4 — Claude analysis
 
@@ -293,8 +336,14 @@ Up to 800 unique `[Tab Name] CN → EN` pairs are sent to Claude.
 > After all entries: `SUMMARY: X inconsistencies found. [One-sentence assessment.]`
 >
 > Plain text, no markdown symbols.
-> [+ Established glossary if term base is loaded — deviations flagged first]
-> [+ Pre-detected exact-match conflicts as a hint]
+>
+> Then, numbered 4/5/6 without gaps — only the rules whose reference file has content:
+> 4. Terms in the established glossary are settled. Do NOT report one when the tabs render it the way the glossary says. Report it ONLY when a tab contradicts the glossary, and start that entry's CN line with `[TERM BASE DEVIATION]`.
+> 5. A form of address that contradicts the terms of address table is an inconsistency, reported in the same CN / Variants / Recommended format.
+> 6. Every `Recommended` line must comply with the style guide.
+>
+> [+ Established glossary, terms of address, style guide — each relevance-filtered against the pairs text]
+> [+ Pre-detected exact-match conflicts as a hint, term-base deviations labelled]
 
 **Post-processing**: `stripMarkdown()`.
 

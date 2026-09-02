@@ -517,6 +517,18 @@ button { cursor: pointer; font-family: 'Noto Sans SC', sans-serif; }
 }
 
 /* ─── Error ──────────────────────────────────────────────────────────────── */
+/* Read-only note of what reference/ loaded — the files have no upload UI, so
+   this is the only place a malformed TSV becomes visible. */
+.reference-status {
+  font-family: 'Space Mono', monospace;
+  font-size: 10px;
+  color: var(--text-dimmer);
+  margin-bottom: 10px;
+  word-break: break-word;
+}
+
+.reference-status-err { color: var(--accent3); }
+
 .error-msg {
   background: rgba(220,38,38,0.07);
   border: 1px solid var(--accent3);

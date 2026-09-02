@@ -39,8 +39,25 @@ A Chrome browser extension for game localization teams. Analyzes Chinese VO scri
 - GAL/Galge scenes receive an additional story summary (processed per-scene).
 - Export the result as CSV or TSV.
 
+### Reference files
+Three files inside the extension folder hold your project's standing reference material. There is
+no upload step — edit the file, then reload the extension at `chrome://extensions`.
+
+| File | What goes in it |
+|---|---|
+| `reference/term-base.tsv` | Approved CN → EN translations, one per line, tab-separated |
+| `reference/terms-of-address.tsv` | How characters address one another: CN, EN, who says it to whom, notes |
+| `reference/style-guide.md` | Free prose on register, punctuation, names, numbers |
+
+Blank lines and lines starting with `#` are ignored, so each file documents its own format at the
+top. The term base feeds the English summaries, the structured table in English mode, and the
+Glossary and Consistency tabs; the style guide and terms of address feed the Glossary and
+Consistency tabs. The Glossary tab shows a one-line status of what loaded — check it there if a
+file looks like it isn't being picked up.
+
 ### Glossary Tab
 - Click **Extract Terms** to identify localization terms and generate 3 English translation options each.
+- Terms already in `reference/term-base.tsv` are skipped.
 - An Excel file is automatically downloaded.
 - A preview of the first 12 terms is shown in the popup.
 

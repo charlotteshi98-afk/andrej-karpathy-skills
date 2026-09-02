@@ -1,0 +1,14 @@
+# Term base — approved CN → EN translations.
+# Columns (tab-separated):  CN Term <TAB> EN Term
+# Blank lines and lines starting with # are ignored.
+# Edit this file, then reload the extension at chrome://extensions to pick up changes.
+#
+# Used by: English summaries, Comprehensive Analysis, Structured table (English mode),
+# Glossary extraction (these CN terms are skipped), Consistency Check (settled terms
+# are not reported unless a tab contradicts them).
+#
+# Replace the example rows below with your project's real terms.
+CN Term	EN Term
+绳网	Inter-Knot
+空洞	Hollow
+以太	Ether

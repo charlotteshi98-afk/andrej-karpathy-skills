@@ -10,7 +10,12 @@ let cnFileName = '';
 let enLines    = [];
 let enFileName = '';
 let isCollapsed = false;
-let termBaseMap = new Map(); // CN term → EN term
+
+/* ── Reference assets, bundled with the extension ────────────
+   Edited as files under reference/ and loaded on open — there is no upload UI. */
+let bundledTermBase = new Map(); // CN term → EN term
+let termsOfAddress  = [];        // [{cn, en, context, notes}]
+let styleGuideText  = '';
 
 /* ── Structured table data store ────────────────────────────── */
 let structuredRows = [];  // [{performId, type, description, lineCount, voCount, storySummary}]
@@ -18,15 +23,12 @@ let structuredActs = [];  // [{n, title, beat, pids: [performId,…]}] — story
 let structuredCols = [0,1,2,3,4,5];
 let archives = [];
 
-/* ── On load: restore API key, term base, prefs ─────────────── */
-chrome.storage.local.get(['apiKey', 'fontSize', 'structuredCols', 'archives', 'termBase', 'termBaseName'], (result) => {
+/* ── On load: restore API key, prefs ────────────────────────── */
+chrome.storage.local.get(['apiKey', 'fontSize', 'structuredCols', 'archives'], (result) => {
   if (result.apiKey) {
     document.getElementById('apiKeyInput').value = result.apiKey;
     updateKeyStatus(true);
     setApiBarCollapsed(true);
-  }
-  if (result.termBase && result.termBase.length) {
-    applyTermBase(new Map(result.termBase), result.termBaseName || 'saved term base', false);
   }
   if (result.fontSize) {
     const size = result.fontSize;
@@ -44,6 +46,10 @@ chrome.storage.local.get(['apiKey', 'fontSize', 'structuredCols', 'archives', 't
   archives = result.archives || [];
   renderArchive();
 });
+
+// The term base used to be uploaded and persisted per browser profile. It now comes
+// from reference/term-base.tsv, so drop the old copy rather than let it linger unused.
+chrome.storage.local.remove(['termBase', 'termBaseName']);
 
 document.querySelectorAll('.fsz-btn').forEach(btn => {
   btn.addEventListener('click', () => {
@@ -626,66 +632,142 @@ document.getElementById('scanSheetBtn').addEventListener('click', async () => {
 });
 
 /* ================================================================
-   TERM BASE UPLOAD
+   REFERENCE ASSETS (bundled files, no upload)
    ================================================================ */
-const tbZone  = document.getElementById('tbUploadZone');
-const tbInput = document.getElementById('tbFileInput');
-
-tbZone.addEventListener('click', () => tbInput.click());
-tbInput.addEventListener('change', () => { if (tbInput.files[0]) handleTBFile(tbInput.files[0]); });
-tbZone.addEventListener('dragover', e => { e.preventDefault(); tbZone.classList.add('drag-over'); });
-tbZone.addEventListener('dragleave', () => tbZone.classList.remove('drag-over'));
-tbZone.addEventListener('drop', e => {
-  e.preventDefault();
-  tbZone.classList.remove('drag-over');
-  const f = e.dataTransfer.files[0];
-  if (f) handleTBFile(f);
-});
-
-function handleTBFile(file) {
-  const reader = new FileReader();
-  reader.onload = (e) => {
-    try {
-      const wb = XLSX.read(e.target.result, { type: 'array' });
-      const ws = wb.Sheets[wb.SheetNames[0]];
-      const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
-      const map = new Map(
-        rows.slice(1)  // skip header row
-          .map(r => [String(r[0] || '').trim(), String(r[1] || '').trim()])
-          .filter(([cn]) => cn)
-      );
-      applyTermBase(map, file.name, true);
-    } catch (err) {
-      setError('glossaryError', 'Term base parse error: ' + err.message);
-    }
-  };
-  reader.readAsArrayBuffer(file);
+/* Split a reference TSV into rows, dropping blank lines, # comments and a
+   header row. Comments let each file document its own format. */
+function parseTsv(text) {
+  return text.split(/\r?\n/)
+    .filter(line => line.trim() && !line.trim().startsWith('#'))
+    .map(line => line.split('\t').map(c => c.trim()))
+    .filter((cells, i) => !(i === 0 && normLabel(cells[0]) === 'cnterm'));
 }
 
-/* Apply a term base to the UI; persist=true saves it to chrome.storage so it
-   survives closing the panel. */
-function applyTermBase(map, name, persist) {
-  termBaseMap = map;
-  tbZone.classList.add('has-file');
-  tbZone.querySelector('.upload-label').textContent = name;
-  tbZone.querySelector('.upload-icon').textContent = '✓';
-  const meta = document.getElementById('tbMeta');
-  meta.style.display = 'flex';
-  meta.innerHTML = `<span class="meta-chip gold">${termBaseMap.size} terms loaded</span><span class="meta-chip">${escapeHtml(name)}</span>`;
-  if (persist) {
-    chrome.storage.local.set({ termBase: [...termBaseMap.entries()], termBaseName: name });
+async function fetchReference(path) {
+  const res = await fetch(chrome.runtime.getURL(path));
+  if (!res.ok) throw new Error(`${path} could not be read (HTTP ${res.status})`);
+  return res.text();
+}
+
+/* Load all three reference files. A missing or empty file is not an error —
+   the tool works with no reference content at all, the prompts just omit it. */
+async function loadReferenceAssets() {
+  const problems = [];
+
+  try {
+    const rows = parseTsv(await fetchReference('reference/term-base.tsv'));
+    bundledTermBase = new Map(rows.filter(r => r[0] && r[1]).map(r => [r[0], r[1]]));
+  } catch (e) { problems.push(e.message); }
+
+  try {
+    const rows = parseTsv(await fetchReference('reference/terms-of-address.tsv'));
+    termsOfAddress = rows
+      .filter(r => r[0] && r[1])
+      .map(r => ({ cn: r[0], en: r[1], context: r[2] || '', notes: r[3] || '' }));
+  } catch (e) { problems.push(e.message); }
+
+  try {
+    const raw = await fetchReference('reference/style-guide.md');
+    // Everything above the first --- rule is the format header, not the guide.
+    const body = raw.includes('\n---') ? raw.slice(raw.indexOf('\n---') + 4) : raw;
+    styleGuideText = body.trim();
+  } catch (e) { problems.push(e.message); }
+
+  renderReferenceStatus(problems);
+}
+
+function renderReferenceStatus(problems) {
+  const el = document.getElementById('referenceStatus');
+  if (!el) return;
+  if (problems.length) {
+    el.textContent = 'Reference files: ' + problems.join('; ');
+    el.classList.add('reference-status-err');
+    return;
   }
+  el.classList.remove('reference-status-err');
+  el.textContent =
+    `Reference files: ${bundledTermBase.size} terms · ${termsOfAddress.length} address forms · ` +
+    `style guide ${styleGuideText ? 'loaded' : 'empty'}`;
+}
+
+const referenceReady = loadReferenceAssets();
+
+/* ── Term base assembly ─────────────────────────────────────── */
+/* Derive term pairs from a loaded EN tracker: character names, plus short
+   term-like rows (item/skill/UI strings sit in the tracker as one-word lines).
+   Full dialogue lines are excluded — they are sentences, not terms. */
+const SENTENCE_PUNCT = /[。！？，、；：""''…—.!?,;]/;
+
+function autoGlossaryFromTracker(lines) {
+  const map = new Map();
+  const add = (cn, en) => {
+    if (cn && en && !map.has(cn)) map.set(cn, en);
+  };
+  for (const l of lines) {
+    add(l.charCHS, l.character);
+    const cn = (l.chineseScript || '').trim();
+    const en = (l.latestEN || l.englishScript || '').trim();
+    if (cn.length && cn.length <= 8 && !SENTENCE_PUNCT.test(cn) &&
+        en && en.split(/\s+/).length <= 6) {
+      add(cn, en);
+    }
+  }
+  return map;
+}
+
+/* The bundled file is the curated source, so it wins over anything derived
+   from a tracker. */
+function effectiveTermBase() {
+  const map = autoGlossaryFromTracker(enLines);
+  for (const [cn, en] of bundledTermBase) map.set(cn, en);
+  return map;
 }
 
 /* Build a glossary reference block for a prompt, limited to terms that
-   actually appear in the given source text (saves tokens on large TBs). */
-function buildGlossaryRef(sourceText, maxTerms = 300) {
-  if (!termBaseMap.size) return '';
-  const relevant = [...termBaseMap.entries()]
+   actually appear in the given source text (saves tokens on large TBs).
+   Pass a map to override the source — Consistency Check needs the curated
+   file alone, not terms derived from the data it is auditing. */
+function buildGlossaryRef(sourceText, map = effectiveTermBase(), maxTerms = 300) {
+  const relevant = [...map.entries()]
     .filter(([cn, en]) => sourceText.includes(cn) || (en && sourceText.includes(en)))
     .slice(0, maxTerms);
   if (!relevant.length) return '';
   return `\n\nReference glossary — always use these established English translations:\n${relevant.map(([cn, en]) => `${cn} → ${en}`).join('\n')}`;
+}
+
+/* Relevance-match text for a loaded EN tracker. The digest sent to Claude is
+   English only, so matching against it alone would drop every CN glossary key —
+   match against both sides of the tracker instead. */
+function trackerMatchText(lines) {
+  return lines
+    .map(l => `${l.charCHS} ${l.character} ${l.chineseScript} ${l.latestEN || l.englishScript}`)
+    .join('\n');
+}
+
+/* Terms of address relevant to the given text, as a prompt block. */
+function buildAddressRef(sourceText, maxTerms = 200) {
+  const relevant = termsOfAddress
+    .filter(t => sourceText.includes(t.cn) || sourceText.includes(t.en))
+    .slice(0, maxTerms);
+  if (!relevant.length) return '';
+  const rows = relevant.map(t =>
+    `${t.cn} → ${t.en}${t.context ? ` (${t.context})` : ''}${t.notes ? ` — ${t.notes}` : ''}`);
+  return `\n\nTerms of address — the established conventions for how characters address one another:\n${rows.join('\n')}`;
+}
+
+function buildStyleGuideRef() {
+  return styleGuideText ? `\n\nStyle guide — follow these conventions:\n${styleGuideText}` : '';
+}
+
+/* Two English renderings count as the same translation if they differ only in
+   case, surrounding whitespace, a leading article, or trailing punctuation —
+   the same trivial differences the consistency prompt is told to ignore. */
+function sameTranslation(a, b) {
+  const norm = s => String(s).trim().toLowerCase()
+    .replace(/^(a|an|the)\s+/, '')
+    .replace(/[.,!?;:…"'’”]+$/, '')
+    .replace(/\s+/g, ' ');
+  return norm(a) === norm(b);
 }
 
 /* ================================================================
@@ -1188,6 +1270,7 @@ document.getElementById('generateGeneral').addEventListener('click', async () =>
   genProgress.style.display = 'block';
 
   try {
+    await referenceReady;
     const length  = document.getElementById('summaryLength').value;
     const activePills = [...document.querySelectorAll('#summaryOptions .pill.active')]
       .map(p => p.dataset.opt);
@@ -1215,7 +1298,7 @@ Focus exclusively on: ${selectedOptions}.
 
 Output requirements:
 - Write entirely in English
-${styleRules}${buildGlossaryRef(digest)}`;
+${styleRules}${buildGlossaryRef(trackerMatchText(enLines))}`;
     } else if (enFromCN) {
       digest = buildScriptDigest(cnScenes);
       const glossaryRef = buildGlossaryRef(digest)
@@ -1315,16 +1398,19 @@ document.getElementById('generateComprehensive').addEventListener('click', async
   setBusy(btn, true);
 
   try {
+    await referenceReady;
     const digest = (usingEN && !enFromCN)
       ? enLines.map(l => `[${l.voId}] ${l.character}: ${l.latestEN || l.englishScript}`).join('\n')
       : buildScriptDigest(cnScenes);
 
-    const glossaryRef = usingEN ? buildGlossaryRef(digest) : '';
+    const glossaryRef = usingEN
+      ? buildGlossaryRef(enFromCN ? digest : trackerMatchText(enLines))
+      : '';
 
     // Stage 1: summarize each segment
     const segments = splitIntoSegments(digest);
     const segPrompt = usingEN
-      ? `You are a script analyst. Summarize this voice-over script segment in 100-150 English words, covering plot events, characters, emotional beats, and tone. Write in plain prose with no markdown formatting. Return ONLY the summary.${enFromCN ? ' The segment is in Chinese; write the summary in English.' + glossaryRef : ''}`
+      ? `You are a script analyst. Summarize this voice-over script segment in 100-150 English words, covering plot events, characters, emotional beats, and tone. Write in plain prose with no markdown formatting. Return ONLY the summary.${enFromCN ? ' The segment is in Chinese; write the summary in English.' : ''}${glossaryRef}`
       : '你是一名剧本分析师。请用100-150个中文字总结这段配音剧本片段，涵盖剧情事件、角色、情感节奏与基调。使用自然流畅的纯文本，不要使用任何markdown符号。只输出总结内容。';
 
     const segSummaries = [];
@@ -1441,6 +1527,7 @@ async function runStructured(withRoadmap) {
   })));
 
   try {
+    await referenceReady;
     const useEN = structuredLang === 'en';
     pauseStructured.show();
 
@@ -1719,25 +1806,32 @@ document.getElementById('generateGlossary').addEventListener('click', async () =
   glsProgress.style.display = 'block';
 
   try {
+    await referenceReady;
     const digest = buildScriptDigest(cnScenes);
+    const termBase = effectiveTermBase();
+    // Address terms are NOT skipped like term-base entries: the script may use an
+    // address form that contradicts the standing convention, and that is worth seeing.
+    const addressRef = buildAddressRef(digest);
     const systemPrompt = `You are a game localization linguist.
 Extract key localization terms from this Chinese VO script. For each term output a pipe-delimited line:
 CN Term|Category|Context|Option A|Reason A|Option B|Reason B|Option C|Reason C
 - Category: one of: Character Name, Place Name, Skill/Ability, Item, Faction, Concept, Other
 - Context: brief usage note (≤15 chars)
 - Options: 3 English translation candidates with brief reasoning
-Output ONLY data lines, no header, no extra text. Extract 20-40 terms.`;
+Output ONLY data lines, no header, no extra text. Extract 20-40 terms.${addressRef}${addressRef ? `
+Still extract terms that appear in the terms of address table. Where the script uses one of them in a way that contradicts the convention above, prefix that term's Context with "⚠ 与称谓表不一致: " followed by the convention it breaks.` : ''}${buildStyleGuideRef()}${styleGuideText ? `
+Your reasoning for each option must be consistent with the style guide above.` : ''}`;
 
-    const tbList = termBaseMap.size > 0
-      ? `\n\nTerm base (already translated — skip these CN terms):\n${[...termBaseMap.keys()].join(', ')}`
+    const tbList = termBase.size > 0
+      ? `\n\nTerm base (already translated — skip these CN terms):\n${[...termBase.keys()].join(', ')}`
       : '';
     const raw  = await callClaude(systemPrompt, digest + tbList);
     const terms = raw.split('\n')
       .map(line => parsePipeRow(line))
       .filter(cols => cols.length >= 9 && cols[0]);
 
-    const filteredTerms = termBaseMap.size > 0
-      ? terms.filter(cols => !termBaseMap.has(cols[0].trim()))
+    const filteredTerms = termBase.size > 0
+      ? terms.filter(cols => !termBase.has(cols[0].trim()))
       : terms;
 
     // Sort by Category then CN Term
@@ -1815,6 +1909,7 @@ document.getElementById('runConsistency').addEventListener('click', async () => 
   pauseConsistency.show();
 
   try {
+    await referenceReady;
     // Step 1: validate active tab is a Google Sheet
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     if (!tab?.url?.includes('docs.google.com/spreadsheets')) {
@@ -1893,14 +1988,24 @@ document.getElementById('runConsistency').addEventListener('click', async () => 
       }
     }
 
-    // Pre-detect exact CN matches with 2+ EN translations
+    // Pre-detect exact CN matches with 2+ EN translations. A term already in the
+    // term base is settled: drop it when every tab agrees with the base, and keep
+    // it only when some tab contradicts the base.
+    // Only the curated file counts here — the tracker-derived glossary is built
+    // from this same unverified sheet data, so trusting it would suppress the very
+    // inconsistencies this check exists to find.
+    const consistencyTermBase = bundledTermBase;
     const directConflicts = [];
     for (const [cn, variants] of termMap) {
-      if (variants.size > 1) {
-        directConflicts.push({
-          cn,
-          variants: [...variants.entries()].map(([en, tabs]) => `"${en}" (${[...tabs].join(', ')})`),
-        });
+      if (variants.size <= 1) continue;
+      const entry = [...variants.entries()].map(([en, tabs]) => `"${en}" (${[...tabs].join(', ')})`);
+      const approved = consistencyTermBase.get(cn);
+      if (approved !== undefined) {
+        const deviates = [...variants.keys()].some(en => !sameTranslation(en, approved));
+        if (!deviates) continue;
+        directConflicts.push({ cn, variants: entry, deviatesFromBase: true, approved });
+      } else {
+        directConflicts.push({ cn, variants: entry, deviatesFromBase: false });
       }
     }
 
@@ -1924,11 +2029,19 @@ document.getElementById('runConsistency').addEventListener('click', async () => 
     }
 
     const pairsText = allPairs.slice(0, 800).join('\n');
-    const tbRef = buildGlossaryRef(pairsText)
+    const tbRef = buildGlossaryRef(pairsText, consistencyTermBase)
       .replace('Reference glossary — always use these established English translations:',
-               'Established glossary (authoritative — flag any row deviating from these):');
+               'Established glossary — these translations are already settled:');
+    const addressRef = buildAddressRef(pairsText);
+    // Only the rules whose reference file actually has content, numbered without gaps.
+    const extraRules = [
+      tbRef && `A Chinese term in the established glossary below is settled. Do NOT report it when the tabs render it the way the glossary says — those are not inconsistencies, however many tabs they span. Report such a term ONLY when a tab contradicts the glossary, and start that entry's CN line with [TERM BASE DEVIATION].`,
+      addressRef && `Treat a form of address that contradicts the terms of address table below as an inconsistency, reported in the same CN / Variants / Recommended format.`,
+      styleGuideText && `Every Recommended line must comply with the style guide below.`,
+    ].filter(Boolean).map((rule, i) => `\n${i + 4}. ${rule}`).join('');
     const directHint = directConflicts.length
-      ? `\n\nPre-detected exact-match conflicts (definitely include these):\n${directConflicts.map(c => `· ${c.cn}: ${c.variants.join(' | ')}`).join('\n')}`
+      ? `\n\nPre-detected exact-match conflicts (definitely include these):\n${directConflicts.map(c =>
+          `· ${c.deviatesFromBase ? '[TERM BASE DEVIATION, glossary says "' + c.approved + '"] ' : ''}${c.cn}: ${c.variants.join(' | ')}`).join('\n')}`
       : '';
 
     const systemPrompt = `You are a professional game localization translator and QA reviewer specializing in translation consistency.
@@ -1946,8 +2059,9 @@ Recommended: [your preferred translation and why, in one sentence]
 3. After all inconsistency entries, add:
 
 SUMMARY: X inconsistencies found. [One-sentence overall assessment of consistency quality.]
+${extraRules}
 
-Write in plain prose, no markdown symbols.${tbRef}${directHint}`;
+Write in plain prose, no markdown symbols.${tbRef}${addressRef}${buildStyleGuideRef()}${directHint}`;
 
     const report = await callClaude(systemPrompt, `Translation pairs by tab (${allPairs.length} unique pairs across ${tabData.length} tabs):\n\n${pairsText}`);
 
